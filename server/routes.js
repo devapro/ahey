@@ -20,6 +20,11 @@ router.use("/:view", (req, res, next) => {
 });
 
 // Route: Room page (dynamic)
+router.get("/connect", (req, res) => {
+	res.render("connect", { page: "channel", title: "Connect" });
+});
+
+// Route: Room page (dynamic)
 router.get("/:channel", (req, res) => {
 	const channel = req.params.channel;
 	if (!isValidChannelName(channel)) {

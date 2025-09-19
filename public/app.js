@@ -348,6 +348,7 @@ const App = Vue.createApp({
 		},
 	    autoInitiateCall() {
 			if (this.audioDevices.length === 0 ) {
+				alert("Check microphone permissions and reload the page");
 				setTimeout(async () => {
 					// Enumerate devices once during pre-call flow if not already done
 					if (this.audioDevices.length === 0 && this.videoDevices.length === 0) {
@@ -355,7 +356,7 @@ const App = Vue.createApp({
 					}
 					this.autoInitiateCall();
 				}, 2000);
-				return alert("Check microphone permissions and reload the page");
+				return;
 			}
 			this.channelId = window.location.pathname.substr(1);
 			const deviceName = hash(navigator.userAgent);

@@ -346,8 +346,17 @@ const App = Vue.createApp({
 			this.showExtraControls - false;
 			window.initiateCall();
 		},
-		autoInitiateCall() {
-			if (this.audioDevices.length === 0 ) return alert("Check microphone permissions and reload the page");
+	    autoInitiateCall() {
+			if (this.audioDevices.length === 0 ) {
+				setTimeout(async () => {
+					// Enumerate devices once during pre-call flow if not already done
+					if (this.audioDevices.length === 0 && this.videoDevices.length === 0) {
+						await this.enumerateDevices();
+					}
+					this.autoInitiateCall();
+				}, 2000);
+				return alert("Check microphone permissions and reload the page");
+			}
 			this.channelId = window.location.pathname.substr(1);
 			const deviceName = hash(navigator.userAgent);
 			this.name = deviceName || "Guest";

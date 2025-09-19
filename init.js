@@ -2,6 +2,7 @@
 const socketIO = require("socket.io"); // For real-time WebSocket communication
 const express = require("express"); // Web framework for Node.js
 const path = require("path"); // Utility for handling file and directory paths
+const http = require("http"); // Node.js HTTP server
 const https = require("https"); // Node.js HTTPS server
 const fs = require("fs"); // File system module for reading files
 const app = express(); // Create an Express application
@@ -18,7 +19,15 @@ const options = {
 
 // Get PORT from env variable else assign 3000 for development
 const PORT = config.PORT || 824;
-const server = https.createServer(options, app); // Create HTTPS server with Express app
+
+const SSL = config.SSL || false;
+
+let server;
+if (SSL) {
+	server = https.createServer(options, app);
+} else {
+	server = http.createServer(app);
+}
 
 // Set EJS as the view engine for rendering templates
 app.set("view engine", "ejs");

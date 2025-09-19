@@ -23,3 +23,6 @@ dist
 # sublime
 *.sublime-project
 *.sublime-workspace
+
+# certificates
+*.pem

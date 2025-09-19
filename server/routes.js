@@ -19,8 +19,8 @@ router.use("/:view", (req, res, next) => {
 	next();
 });
 
-// Route: Room page (dynamic)
-router.get("/connect", (req, res) => {
+// Route: Auto join page
+router.get("/join", (req, res) => {
 	res.render("connect", { page: "channel", title: "Connect" });
 });
 

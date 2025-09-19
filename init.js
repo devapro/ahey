@@ -12,11 +12,6 @@ const config = require("./server/config");
 const signallingServer = require("./server/signalling-server");
 const routes = require("./server/routes");
 
-const options = {
-  key: fs.readFileSync(path.join(__dirname, "domain-key.pem")),
-  cert: fs.readFileSync(path.join(__dirname, "domain.pem")),
-};
-
 // Get PORT from env variable else assign 3000 for development
 const PORT = config.PORT || 824;
 
@@ -24,6 +19,10 @@ const SSL = config.SSL || false;
 
 let server;
 if (SSL) {
+	const options = {
+		key: fs.readFileSync(path.join(__dirname, "domain-key.pem")),
+		cert: fs.readFileSync(path.join(__dirname, "domain.pem")),
+	};
 	server = https.createServer(options, app);
 } else {
 	server = http.createServer(app);

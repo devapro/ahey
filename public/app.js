@@ -339,14 +339,16 @@ const App = Vue.createApp({
 			this.isScreenSharing = false;
 		},
 
-		initiateCall() {
+		async initiateCall() {
+			await this.getPreCallMedia(); 
 			if (!this.channelId) return alert("Invalid channel id");
 			if (!this.name) return alert("Please enter your name");
 			this.callInitiated = true;
 			this.showExtraControls - false;
 			window.initiateCall();
 		},
-	    autoInitiateCall() {
+	    async autoInitiateCall() {
+			await this.getPreCallMedia(); 
 			if (this.audioDevices.length === 0 ) {
 				alert("Check microphone permissions and reload the page");
 				setTimeout(async () => {
@@ -616,9 +618,9 @@ const App = Vue.createApp({
 		},
 	},
 	mounted() {
-		if (!this.callInitiated) {
-			this.getPreCallMedia();
-		}
+		// if (!this.callInitiated) {
+		// 	this.getPreCallMedia(); ///????
+		// }
 	},
 }).mount("#app");
 

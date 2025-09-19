@@ -557,7 +557,7 @@ const App = Vue.createApp({
 				const oscillator = ctx.createOscillator();
 				const dst = ctx.createMediaStreamDestination();
 				oscillator.connect(dst);
-				oscillator.start();
+				oscillator.start(); //????
 				oscillator.stop(ctx.currentTime + 0.01);
 				return dst.stream.getAudioTracks()[0];
 			}

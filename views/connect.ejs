@@ -117,7 +117,7 @@
 							placeholder="Your name"
 							maxlength="50"
 						/> -->
-						<span class="loading">Loading...</span>
+						<span class="loading">Connecting...</span>
 					</section>
 
 					<section id="buttons">
@@ -133,13 +133,16 @@
 						<!-- <button class="join" v-if="!callInitiated" v-on:click="initiateCall">
 							<i class="icon-phone"></i>&nbsp;Join
 						</button> -->
+						<button class="join" v-if="!callInitiated" v-on:click="autoInitiateCall">
+							<i class="icon-phone"></i>&nbsp;Connect
+						</button>
 					</section>
 				</secion>
 			</div>
 		</main>
 	</body>
 </html>
-<script>
+<!-- <script>
 	window.addEventListener('DOMContentLoaded', function() {
 		setTimeout(function() {
 			if (typeof App !== 'undefined' && App.autoInitiateCall) {
@@ -147,4 +150,4 @@
 			}
 		}, 2000);
 	});
-</script>
+</script> -->

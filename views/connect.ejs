@@ -79,7 +79,6 @@
 							</li>
 
 							<li class="action" @click="copyURL"><i class="icon-link"></i> Copy channel URL</li>
-							<li class="action red" @click="endCall" v-if="callInitiated"><i class="icon-phone-off"></i> Leave</li>
 						</ul>
 					</section>
 
@@ -105,6 +104,7 @@
 							<i :class="'icon-video'+(videoEnabled ? '' : '-off')"></i>
 						</button>
 								<button @click="toggleExtraControls"><i class="icon-more-vertical"></i></button>
+								<button class="red" @click="endCall" v-if="callInitiated"><i class="icon-phone-off"></i></button>
 						<!-- <button class="join" v-if="!callInitiated" v-on:click="initiateCall">
 							<i class="icon-phone"></i>&nbsp;Join
 						</button> -->

@@ -1,4 +1,4 @@
-/* globals App, io, ICE_SERVERS */
+/* globals core, io, ICE_SERVERS */
 "use strict";
 
 const SIGNALLING_SERVER = window.origin;
@@ -28,7 +28,7 @@ const setupPeerConnectionHandlers = (peerConnection, peer_id) => {
 
 	peerConnection.ontrack = (event) => {
 		const stream = event.streams[0];
-		App.peers[peer_id]["stream"] = stream;
+		core.state.peers[peer_id]["stream"] = stream;
 
 		// Only handle audio stream if it contains audio tracks and not already handled
 		if (stream.getAudioTracks().length > 0 && !audioStreams.has(peer_id)) {
@@ -39,7 +39,9 @@ const setupPeerConnectionHandlers = (peerConnection, peer_id) => {
 	peerConnection.ondatachannel = (event) => {
 		event.channel.onmessage = (msg) => {
 			try {
-				App.handleIncomingDataChannelMessage(JSON.parse(msg.data));
+				if (typeof core.handleIncomingDataChannelMessage === 'function') {
+					core.handleIncomingDataChannelMessage(JSON.parse(msg.data));
+				}
 			} catch (err) {
 				console.log(err);
 			}
@@ -48,18 +50,9 @@ const setupPeerConnectionHandlers = (peerConnection, peer_id) => {
 };
 
 const addLocalTracksToPeer = (peerConnection) => {
-	if (App.localMediaStream) {
-		App.localMediaStream.getTracks().forEach((track) => {
-			const sender = peerConnection.addTrack(track, App.localMediaStream);
-			// Set codec preferences for video tracks if supported
-			if (track.kind === "video" && window.RTCRtpSender && RTCRtpSender.getCapabilities) {
-				const codecs = RTCRtpSender.getCapabilities("video").codecs;
-				const preferredCodecs = codecs.filter((codec) => codec.mimeType.toLocaleLowerCase() === "video/h264");
-				const transceiver = peerConnection.getTransceivers().find((t) => t.sender === sender);
-				if (transceiver && transceiver.setCodecPreferences && preferredCodecs.length) {
-					transceiver.setCodecPreferences(preferredCodecs);
-				}
-			}
+	if (core.state.localMediaStream) {
+		core.state.localMediaStream.getTracks().forEach((track) => {
+			peerConnection.addTrack(track, core.state.localMediaStream);
 		});
 	}
 };
@@ -117,10 +110,9 @@ const setupOfferCreation = (peerConnection, peer_id) => {
 
 const handleSessionDescription = (config) => {
 	const peer_id = config.peer_id;
-	const peer = App.peers[peer_id]["rtc"];
+	const peer = core.state.peers[peer_id]["rtc"];
 	const remoteDescription = config.session_description;
 
-	// Prefer H.264 in SDP for Safari compatibility (Safari only supports H.264 for video)
 	if (remoteDescription && remoteDescription.sdp) {
 		remoteDescription.sdp = preferH264(remoteDescription.sdp);
 	}
@@ -132,7 +124,6 @@ const handleSessionDescription = (config) => {
 			if (remoteDescription.type == "offer") {
 				peer.createAnswer(
 					(localDescription) => {
-						// Prefer H.264 in SDP for Safari compatibility (Safari only supports H.264 for video)
 						localDescription.sdp = preferH264(localDescription.sdp);
 						peer.setLocalDescription(
 							localDescription,
@@ -153,7 +144,7 @@ const handleSessionDescription = (config) => {
 };
 
 const handleIceCandidate = (config) => {
-	const peer = App.peers[config.peer_id]["rtc"];
+	const peer = core.state.peers[config.peer_id]["rtc"];
 	const iceCandidate = config.ice_candidate;
 	peer.addIceCandidate(new RTCIceCandidate(iceCandidate)).catch((error) => {
 		console.log("Error addIceCandidate", error);
@@ -161,36 +152,37 @@ const handleIceCandidate = (config) => {
 };
 
 const cleanupPeer = (peer_id) => {
-	if (peer_id in App.peers) {
-		App.peers[peer_id]["rtc"].close();
+	if (peer_id in core.state.peers) {
+		core.state.peers[peer_id]["rtc"].close();
 	}
-	delete App.dataChannels[peer_id];
-	delete App.peers[peer_id];
+	delete core.state.dataChannels[peer_id];
+	delete core.state.peers[peer_id];
 	removeAudioStream(peer_id);
 };
 
 const cleanupAllPeers = () => {
-	Object.keys(App.peers).forEach((peer_id) => {
-		App.peers[peer_id]["rtc"].close();
+	Object.keys(core.state.peers).forEach((peer_id) => {
+		core.state.peers[peer_id]["rtc"].close();
 	});
-	App.peers = {};
+	core.state.peers = {};
 };
 
 const joinChatChannel = (channel, userData) => signalingSocket.emit("join", { channel, userData });
 
+
 window.initiateCall = () => {
-	App.userAgent = navigator.userAgent;
+	core.state.userAgent = navigator.userAgent;
 	signalingSocket = io(SIGNALLING_SERVER);
 	window.signalingSocket = signalingSocket; /* expose for global access */
 
 	signalingSocket.on("connect", () => {
-		App.peerId = signalingSocket.id;
-		const userData = { peerName: App.name, userAgent: App.userAgent };
+		core.state.peerId = signalingSocket.id;
+		const userData = { peerName: core.state.name, userAgent: core.state.userAgent };
 
-		if (App.localMediaStream) {
-			joinChatChannel(App.channelId, userData);
+		if (core.state.localMediaStream) {
+			joinChatChannel(core.state.channelId, userData);
 		} else {
-			setupLocalMedia(() => joinChatChannel(App.channelId, userData));
+			setupLocalMedia(() => joinChatChannel(core.state.channelId, userData));
 		}
 	});
 
@@ -198,15 +190,15 @@ window.initiateCall = () => {
 
 	signalingSocket.on("addPeer", (config) => {
 		const peer_id = config.peer_id;
-		if (peer_id in App.peers) return;
+		if (peer_id in core.state.peers) return;
 
 		const peerConnection = createPeerConnection();
-		App.peers[peer_id] = { ...App.peers[peer_id], data: config.channel[peer_id].userData };
-		App.peers[peer_id]["rtc"] = peerConnection;
+		core.state.peers[peer_id] = { ...core.state.peers[peer_id], data: config.channel[peer_id].userData };
+		core.state.peers[peer_id]["rtc"] = peerConnection;
 
 		setupPeerConnectionHandlers(peerConnection, peer_id);
 		addLocalTracksToPeer(peerConnection);
-		App.dataChannels[peer_id] = peerConnection.createDataChannel("ot__data_channel");
+		core.state.dataChannels[peer_id] = peerConnection.createDataChannel("ot__data_channel");
 
 		if (config.should_create_offer) {
 			setupOfferCreation(peerConnection, peer_id);
@@ -219,27 +211,25 @@ window.initiateCall = () => {
 };
 
 function setupLocalMedia(callback) {
-	if (App.localMediaStream != null) {
+	if (core.state.localMediaStream != null) {
 		if (callback) callback();
 		return;
 	}
 
 	// Build constraints based on settings
 	const constraints = {
-		audio: App.audioEnabled ? (App.selectedAudioDeviceId ? { deviceId: App.selectedAudioDeviceId } : true) : false,
-		video: App.videoEnabled ? (App.selectedVideoDeviceId ? { deviceId: App.selectedVideoDeviceId } : true) : false,
+		audio: core.state.audioEnabled ? (core.state.selectedAudioDeviceId ? { deviceId: core.state.selectedAudioDeviceId } : true) : false,
 	};
 
 	navigator.mediaDevices
 		.getUserMedia(constraints)
 		.then((stream) => {
-			App.localMediaStream = stream;
-
+			core.state.localMediaStream = stream;
 			if (callback) callback();
 		})
 		.catch((error) => {
 			console.error(error);
-			App.setToast("Unable to get microphone access.");
+			if (typeof core.setToast === 'function') core.setToast("Unable to get microphone access.");
 		});
 }
 
@@ -256,7 +246,7 @@ function handleAudioStream(stream, peerId) {
 	function processAudio() {
 		analyserNode.getByteFrequencyData(dataArray);
 		const averageVolume = dataArray.reduce((acc, val) => acc + val, 0) / bufferLength;
-		App.setTalkingPeer(peerId, averageVolume > VOLUME_THRESHOLD);
+		if (typeof core.setTalkingPeer === 'function') core.setTalkingPeer(peerId, averageVolume > VOLUME_THRESHOLD);
 		requestAnimationFrame(processAudio);
 	}
 

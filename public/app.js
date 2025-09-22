@@ -1,36 +1,40 @@
-/* globals Vue */
 
-"use strict";
+// Assumes core.js is loaded via a <script> tag before this file
+// and is available as window.core
 
-// eslint-disable-next-line no-unused-vars
+// Minimal Vue app for UI, proxies core.state and core methods
 const App = Vue.createApp({
-       data() {
-	       const channelId = window.location.pathname.substr(1);
-	       const searchParams = new URLSearchParams(window.location.search);
-
-	       const name = searchParams.get("name");
-
-	       return {
-		       channelId,
-		       peerId: "",
-		       userAgent: "",
-		       audioDevices: [],
-		       audioEnabled: true,
-		       selectedAudioDeviceId: null,
-		       name: name ?? window.localStorage.name,
-		       callInitiated: false,
-		       localMediaStream: null,
-		       peers: {},
-		       dataChannels: {},
-		       showExtraControls: false,
-		       showAudioDevices: false,
-		       toast: [{ type: "", message: "" }],
-	       };
-       },
+	data() {
+		// Make core.state reactive so UI updates
+		if (!core._reactiveState) {
+			core._reactiveState = Vue.reactive(core.state);
+		}
+		return core._reactiveState;
+	},
+	methods: {
+		toggleExtraControls: core.toggleExtraControls ? core.toggleExtraControls.bind(core) : function() {
+			this.showExtraControls = !this.showExtraControls;
+		},
+		resetPopups: core.resetPopups ? core.resetPopups.bind(core) : function() {
+			this.showExtraControls = false;
+			this.showAudioDevices = false;
+		},
+		initiateCall: core.initiateCall ? core.initiateCall.bind(core) : function() {},
+		autoInitiateCall: core.autoInitiateCall ? core.autoInitiateCall.bind(core) : function() {},
+		setToast: core.setToast.bind(core),
+		copyURL: core.copyURL.bind(core),
+		toggleAudio: core.toggleAudio.bind(core),
+		switchAudioDevice: core.switchAudioDevice.bind(core),
+		togglePreCallAudio: core.togglePreCallAudio.bind(core),
+		endCall: core.endCall.bind(core),
+		updateName() {
+			core.updateName(this.name);
+		},
+	},
 	computed: {
 		peersArray() {
 			return Object.keys(this.peers)
-				.filter((p) => this.peers[p].data.userAgent)
+				.filter((p) => this.peers[p].data && this.peers[p].data.userAgent)
 				.map((peer) => ({
 					stream: this.peers[peer].stream,
 					name: this.peers[peer].data.peerName,
@@ -38,211 +42,10 @@ const App = Vue.createApp({
 				}));
 		},
 	},
-	watch: {
-		callInitiated(newValue, oldValue) {
-			// if (oldValue && !newValue) {
-			// 	// Call ended, clean up screen sharing
-			// 	this.cleanupScreenShare();
-			// }
-		},
-	},
-	methods: {
-		toggleExtraControls() {
-			this.showExtraControls = !this.showExtraControls;
-		},
-		resetPopups() {
-			this.showExtraControls = false;
-			this.showAudioDevices = false;
-		},
-			   // ...existing code...
-			   // ...existing code...
-			   // ...existing code...
-			   // ...existing code...
-			   // ...existing code...
-			   // ...existing code...
-
-	       async initiateCall() {
-		       if (!this.channelId) return alert("Invalid channel id");
-		       if (!this.name) return alert("Please enter your name");
-		       this.callInitiated = true;
-		       this.showExtraControls = false;
-		       window.initiateCall();
-	       },
-	   async autoInitiateCall() {
-		    //    if (this.audioDevices.length === 0 ) {
-			//        alert("Check microphone permissions and reload the page");
-			//        setTimeout(async () => {
-			// 	       if (this.audioDevices.length === 0) {
-			// 		       await this.enumerateDevices();
-			// 	       }
-			// 	       this.autoInitiateCall();
-			//        }, 2000);
-			//        return;
-		    //    }
-		       this.channelId = window.location.pathname.substr(1);
-		       const deviceName = hash(navigator.userAgent);
-		       this.name = deviceName || "Guest";
-		       this.callInitiated = true;
-		       this.showExtraControls = false;
-		       window.initiateCall();
-	       },
-		setToast(message, type = "error") {
-			this.toast = { type, message, time: new Date().getTime() };
-			setTimeout(() => {
-				if (new Date().getTime() - this.toast.time >= 3000) {
-					this.toast.message = "";
-				}
-			}, 3500);
-		},
-		copyURL() {
-			navigator.clipboard.writeText(`${window.location.origin}/${this.channelId}`).then(
-				() => this.setToast("Channel URL copied 👍", "success"),
-				() => console.error("Unable to copy channel URL")
-			);
-		},
-		toggleAudio() {
-			this.audioEnabled = !this.audioEnabled;
-			this.getPreCallMedia();
-		},
-		switchAudioDevice(newDeviceId) {
-			return this.switchMediaDevice(newDeviceId, "audio");
-		},
-		togglePreCallAudio() {
-			this.audioEnabled = !this.audioEnabled;
-			this.getPreCallMedia();
-		},
-		endCall() {
-			// Disconnect from signaling server
-			if (window.signalingSocket) {
-				window.signalingSocket.disconnect();
-			}
-
-			// Clean up all peer connections
-			Object.keys(this.peers).forEach((peerId) => {
-				if (this.peers[peerId].rtc) {
-					this.peers[peerId].rtc.close();
-				}
-			});
-
-			// Clean up data channels
-			Object.keys(this.dataChannels).forEach((peerId) => {
-				if (this.dataChannels[peerId]) {
-					this.dataChannels[peerId].close();
-				}
-			});
-
-			// Reset call state
-			this.peers = {};
-			this.dataChannels = {};
-			this.callInitiated = false;
-
-			// Show toast
-			this.setToast("Call ended", "success");
-
-			// Re-initialize pre-call preview
-			this.getPreCallMedia();
-		},
-		stopEvent(e) {
-			e.preventDefault();
-			e.stopPropagation();
-		},
-		updateName() {
-			window.localStorage.name = this.name;
-		},
-		updateNameAndPublish() {
-			window.localStorage.name = this.name;
-			this.updateUserData("peerName", this.name);
-		},
-		updateUserData(key, value) {
-			this.sendDataMessage(key, value);
-		},
-		endCall() {
-			// Disconnect from signaling server
-			if (window.signalingSocket) {
-				window.signalingSocket.disconnect();
-			}
-
-			// Clean up all peer connections
-			Object.keys(this.peers).forEach((peerId) => {
-				if (this.peers[peerId].rtc) {
-					this.peers[peerId].rtc.close();
-				}
-			});
-
-			// Clean up data channels
-			Object.keys(this.dataChannels).forEach((peerId) => {
-				if (this.dataChannels[peerId]) {
-					this.dataChannels[peerId].close();
-				}
-			});
-
-			// Reset call state
-			this.peers = {};
-			this.dataChannels = {};
-			this.callInitiated = false;
-
-			// Show toast
-			this.setToast("Call ended", "success");
-
-			// Re-initialize pre-call preview
-			this.getPreCallMedia();
-		},
-		async enumerateDevices() {
-		       try {
-			       const devices = await navigator.mediaDevices.enumerateDevices();
-			       this.audioDevices = devices.filter((device) => device.kind === "audioinput");
-			       const defaultAudioDeviceId = this.audioDevices.find((device) => device.deviceId == "default")?.deviceId;
-			       this.selectedAudioDeviceId = defaultAudioDeviceId ?? this.audioDevices[0]?.deviceId;
-		       } catch (error) {
-			       console.error("Failed to initialize media devices:", error);
-		       }
-	       },
-	       getBlankTrack(kind) {
-		       if (kind === "audio") {
-			       const ctx = new (window.AudioContext || window.webkitAudioContext)();
-			       const oscillator = ctx.createOscillator();
-			       const dst = ctx.createMediaStreamDestination();
-			       oscillator.connect(dst);
-			       oscillator.start();
-			       oscillator.stop(ctx.currentTime + 0.01);
-			       return dst.stream.getAudioTracks()[0];
-		       }
-		       return null;
-	       },
-	       async getPreCallMedia() {
-		       try {
-			       if (this.localMediaStream) {
-				       this.localMediaStream.getTracks().forEach((track) => track.stop());
-			       }
-			       const constraints = {
-				       audio: this.audioEnabled
-					       ? this.selectedAudioDeviceId
-						       ? { deviceId: this.selectedAudioDeviceId }
-						       : true
-					       : false,
-			       };
-			       this.localMediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-
-			       if (this.audioDevices.length === 0) {
-				       await this.enumerateDevices();
-			       }
-		       } catch (e) {
-			       console.error("Failed to get pre-call media:", e);
-			       this.audioEnabled = false;
-			       const tracks = [this.getBlankTrack("audio")];
-			       this.localMediaStream = new MediaStream(tracks);
-			       this.setToast("Unable to access microphone");
-		       }
-	       },
-	},
 	mounted() {
-		// if (!this.callInitiated) {
-		// 	this.getPreCallMedia(); ///????
-		// }
+		// Optionally auto-initiate call for join.ejs
+		if (window.location.pathname.includes('join')) {
+			this.autoInitiateCall();
+		}
 	},
-}).mount("#app");
-
-// Register service worker for PWA functionality
-// if ("serviceWorker" in navigator) {
-// 	navigator.serviceWorker.register("/sw.js");
-// }
+}).mount('#app');

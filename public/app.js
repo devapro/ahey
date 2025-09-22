@@ -69,16 +69,16 @@ const App = Vue.createApp({
 		       window.initiateCall();
 	       },
 	   async autoInitiateCall() {
-		       if (this.audioDevices.length === 0 ) {
-			       alert("Check microphone permissions and reload the page");
-			       setTimeout(async () => {
-				       if (this.audioDevices.length === 0) {
-					       await this.enumerateDevices();
-				       }
-				       this.autoInitiateCall();
-			       }, 2000);
-			       return;
-		       }
+		    //    if (this.audioDevices.length === 0 ) {
+			//        alert("Check microphone permissions and reload the page");
+			//        setTimeout(async () => {
+			// 	       if (this.audioDevices.length === 0) {
+			// 		       await this.enumerateDevices();
+			// 	       }
+			// 	       this.autoInitiateCall();
+			//        }, 2000);
+			//        return;
+		    //    }
 		       this.channelId = window.location.pathname.substr(1);
 		       const deviceName = hash(navigator.userAgent);
 		       this.name = deviceName || "Guest";
@@ -101,23 +101,14 @@ const App = Vue.createApp({
 			);
 		},
 		toggleAudio() {
-			return this.toggleMedia("audio");
-		},
-		toggleVideo() {
-			return this.toggleMedia("video");
+			this.audioEnabled = !this.audioEnabled;
+			this.getPreCallMedia();
 		},
 		switchAudioDevice(newDeviceId) {
 			return this.switchMediaDevice(newDeviceId, "audio");
 		},
-		switchVideoDevice(newDeviceId) {
-			return this.switchMediaDevice(newDeviceId, "video");
-		},
 		togglePreCallAudio() {
 			this.audioEnabled = !this.audioEnabled;
-			this.getPreCallMedia();
-		},
-		togglePreCallVideo() {
-			this.videoEnabled = !this.videoEnabled;
 			this.getPreCallMedia();
 		},
 		endCall() {
@@ -164,23 +155,6 @@ const App = Vue.createApp({
 		},
 		updateUserData(key, value) {
 			this.sendDataMessage(key, value);
-		},
-		formatDate(dateString) {
-			const date = new Date(dateString);
-			const hours = date.getHours() > 12 ? date.getHours() - 12 : date.getHours();
-			return (
-				(hours < 10 ? "0" + hours : hours) +
-				":" +
-				(date.getMinutes() < 10 ? "0" + date.getMinutes() : date.getMinutes()) +
-				" " +
-				(date.getHours() >= 12 ? "PM" : "AM")
-			);
-		},
-		sanitizeString(str) {
-			const tagsToReplace = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
-			const replaceTag = (tag) => tagsToReplace[tag] || tag;
-			const safe_tags_replace = (str) => str.replace(/[&<>]/g, replaceTag);
-			return safe_tags_replace(str);
 		},
 		endCall() {
 			// Disconnect from signaling server
@@ -252,7 +226,8 @@ const App = Vue.createApp({
 			       if (this.audioDevices.length === 0) {
 				       await this.enumerateDevices();
 			       }
-		       } catch {
+		       } catch (e) {
+			       console.error("Failed to get pre-call media:", e);
 			       this.audioEnabled = false;
 			       const tracks = [this.getBlankTrack("audio")];
 			       this.localMediaStream = new MediaStream(tracks);

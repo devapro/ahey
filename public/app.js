@@ -33,13 +33,15 @@ const App = Vue.createApp({
 	},
 	computed: {
 		peersArray() {
-			return Object.keys(this.peers)
-				.filter((p) => this.peers[p].data.userAgent)
-				.map((peer) => ({
-					stream: this.peers[peer].stream,
-					name: this.peers[peer].data.peerName,
-					isTalking: this.peers[peer].data.isTalking,
-				}));
+			const peers = Object.keys(this.peers);
+			console.log('peersArray computed - total peers:', peers.length, 'peers:', peers);
+			const filtered = peers.filter((p) => this.peers[p].data?.userAgent);
+			console.log('peersArray computed - filtered peers:', filtered.length);
+			return filtered.map((peer) => ({
+				stream: this.peers[peer].stream,
+				name: this.peers[peer].data.peerName,
+				isTalking: this.peers[peer].data.isTalking,
+			}));
 		},
 		videoLayoutClass() {
 			const totalParticipants = this.peersArray.length + 1; // +1 for self
@@ -56,6 +58,9 @@ const App = Vue.createApp({
 	methods: {
 		toggleExtraControls() {
 			this.showExtraControls = !this.showExtraControls;
+		},
+		getWebRTCManager() {
+			return window.getWebRTCManager();
 		},
 		resetPopups() {
 			this.showExtraControls = false;
@@ -290,30 +295,11 @@ const App = Vue.createApp({
 			this.getPreCallMedia();
 		},
 		endCall() {
-			// Disconnect from signaling server
-			if (window.signalingSocket) {
-				window.signalingSocket.disconnect();
-			}
-
-			// Clean up all peer connections
-			Object.keys(this.peers).forEach((peerId) => {
-				if (this.peers[peerId].rtc) {
-					this.peers[peerId].rtc.close();
-				}
-			});
-
-			// Clean up data channels
-			Object.keys(this.dataChannels).forEach((peerId) => {
-				if (this.dataChannels[peerId]) {
-					this.dataChannels[peerId].close();
-				}
-			});
+			const webrtcManager = this.getWebRTCManager();
+			webrtcManager.endCall();
 
 			// Reset call state
-			this.peers = {};
-			this.dataChannels = {};
 			this.callInitiated = false;
-
 
 			// Show toast
 			this.setToast("Call ended", "success");
@@ -444,6 +430,14 @@ const App = Vue.createApp({
 		},
 	},
 	mounted() {
+		console.log('Vue App mounted! window.markAppReady available:', !!window.markAppReady);
+		// Notify peer.js that Vue App is ready
+		if (window.markAppReady) {
+			console.log('Vue App calling markAppReady()');
+			window.markAppReady();
+		} else {
+			console.warn('Vue App mounted but markAppReady not available');
+		}
 		// if (!this.callInitiated) {
 		// 	this.getPreCallMedia(); ///????
 		// }

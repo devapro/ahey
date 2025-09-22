@@ -1,274 +1,312 @@
-/* globals App, io, ICE_SERVERS */
+/* globals WebRTCManager, io */
 "use strict";
 
-const SIGNALLING_SERVER = window.origin;
-// ICE servers are now imported from ice-config.js
-const VOLUME_THRESHOLD = 24;
-const AUDIO_WINDOW_SIZE = 256;
+// Global WebRTC manager instance
+let webrtcManager = null;
 
-let signalingSocket = null; /* our socket.io connection to our webserver */
-window.signalingSocket = null; /* expose for global access */
-let audioStreams = new Map(); // Holds audio stream related data for each stream
+// Legacy global window exposure for compatibility
+window.signalingSocket = null;
 
-// Utility functions
-const createPeerConnection = () => new RTCPeerConnection({ iceServers: ICE_SERVERS });
+// Event queue for events that arrive before Vue app is ready
+let eventQueue = [];
+let appReady = false;
 
-const setupPeerConnectionHandlers = (peerConnection, peer_id) => {
-	peerConnection.onicecandidate = (event) => {
-		if (event.candidate) {
-			signalingSocket.emit("relayICECandidate", {
-				peer_id,
-				ice_candidate: {
-					sdpMLineIndex: event.candidate.sdpMLineIndex,
-					candidate: event.candidate.candidate,
-				},
-			});
-		}
-	};
-
-	peerConnection.ontrack = (event) => {
-		const stream = event.streams[0];
-		App.peers[peer_id]["stream"] = stream;
-
-		// Only handle audio stream if it contains audio tracks and not already handled
-		if (stream.getAudioTracks().length > 0 && !audioStreams.has(peer_id)) {
-			handleAudioStream(stream, peer_id);
-		}
-	};
-
-	peerConnection.ondatachannel = (event) => {
-		event.channel.onmessage = (msg) => {
-			try {
-				App.handleIncomingDataChannelMessage(JSON.parse(msg.data));
-			} catch (err) {
-				console.log(err);
-			}
-		};
-	};
-};
-
-const addLocalTracksToPeer = (peerConnection) => {
-	if (App.localMediaStream) {
-		App.localMediaStream.getTracks().forEach((track) => {
-			const sender = peerConnection.addTrack(track, App.localMediaStream);
-			// Set codec preferences for video tracks if supported
-			if (track.kind === "video" && window.RTCRtpSender && RTCRtpSender.getCapabilities) {
-				const codecs = RTCRtpSender.getCapabilities("video").codecs;
-				const preferredCodecs = codecs.filter((codec) => codec.mimeType.toLocaleLowerCase() === "video/h264");
-				const transceiver = peerConnection.getTransceivers().find((t) => t.sender === sender);
-				if (transceiver && transceiver.setCodecPreferences && preferredCodecs.length) {
-					transceiver.setCodecPreferences(preferredCodecs);
-				}
-			}
-		});
+// Initialize WebRTC Manager
+function initializeWebRTCManager() {
+	if (webrtcManager) {
+		webrtcManager.destroy();
 	}
-};
 
-// Prefer H.264 codec in SDP for better Safari compatibility
-// WARNING: Avoid repeated calls to this function on the same SDP, as repeated reordering may cause interoperability issues with some clients.
-function preferH264(sdp) {
-	const sdpLines = sdp.split("\r\n");
-	const mLineIndex = sdpLines.findIndex((line) => line.startsWith("m=video"));
-	if (mLineIndex === -1) return sdp;
+	webrtcManager = new WebRTCManager();
 
-	// Find all H264 payload types
-	const h264PayloadTypes = sdpLines
-		.filter((line) => line.startsWith("a=rtpmap") && line.toLowerCase().includes("h264"))
-		.map((line) => {
-			const match = line.match(/^a=rtpmap:(\d+)\s+H264/i);
-			return match ? match[1] : null;
-		})
-		.filter(Boolean);
+	// Setup event listeners to bridge with the UI (App)
+	setupEventListeners();
 
-	if (h264PayloadTypes.length === 0) return sdp;
-
-	// Reorder m=video line to put H264 first
-	const mLineParts = sdpLines[mLineIndex].split(" ");
-	const newMLine = [
-		...mLineParts.slice(0, 3),
-		...h264PayloadTypes,
-		...mLineParts.slice(3).filter((pt) => !h264PayloadTypes.includes(pt)),
-	];
-	sdpLines[mLineIndex] = newMLine.join(" ");
-
-	return sdpLines.join("\r\n");
+	return webrtcManager;
 }
 
-const setupOfferCreation = (peerConnection, peer_id) => {
-	peerConnection.onnegotiationneeded = () => {
-		peerConnection
-			.createOffer()
-			.then((localDescription) => {
-				// Prefer H.264 in SDP for Safari compatibility (Safari only supports H.264 for video)
-				localDescription.sdp = preferH264(localDescription.sdp);
-				peerConnection
-					.setLocalDescription(localDescription)
-					.then(() => {
-						signalingSocket.emit("relaySessionDescription", {
-							peer_id: peer_id,
-							session_description: localDescription,
-						});
-					})
-					.catch((error) => console.log("Offer setLocalDescription failed!", error));
-			})
-			.catch((error) => console.log("Error sending offer: ", error));
+// Function to process queued events when App becomes ready
+function processQueuedEvents() {
+	console.log('peer.js: Processing', eventQueue.length, 'queued events');
+	while (eventQueue.length > 0) {
+		const { type, handler, data } = eventQueue.shift();
+		console.log('peer.js: Processing queued', type, 'event');
+		try {
+			handler(data);
+		} catch (error) {
+			console.error('peer.js: Error processing queued event', type, error);
+		}
+	}
+}
+
+// Function to mark app as ready and process queue
+function markAppReady() {
+	console.log('peer.js: markAppReady called - appReady:', appReady, 'window.App:', !!window.App);
+	if (!appReady && window.App) {
+		console.log('peer.js: Vue App is now ready, processing queue');
+		appReady = true;
+		processQueuedEvents();
+	} else if (!window.App) {
+		console.log('peer.js: markAppReady called but App not available yet');
+	} else if (appReady) {
+		console.log('peer.js: markAppReady called but app already ready');
+	}
+}
+
+// Helper function to handle events (either immediately or queue them)
+const handleEvent = (eventType, handler) => {
+	return (data) => {
+		if (appReady && window.App) {
+			handler(data);
+		} else {
+			console.log(`peer.js: Queueing ${eventType} event - App not ready yet`);
+			eventQueue.push({ type: eventType, handler, data });
+		}
 	};
 };
 
-const handleSessionDescription = (config) => {
-	const peer_id = config.peer_id;
-	const peer = App.peers[peer_id]["rtc"];
-	const remoteDescription = config.session_description;
+function setupEventListeners() {
+	if (!webrtcManager) return;
 
-	// Prefer H.264 in SDP for Safari compatibility (Safari only supports H.264 for video)
-	if (remoteDescription && remoteDescription.sdp) {
-		remoteDescription.sdp = preferH264(remoteDescription.sdp);
-	}
+	// Local stream ready
+	webrtcManager.on('localStreamReady', (stream) => {
+		if (window.App) {
+			App.localMediaStream = stream;
+		}
+	});
 
-	const desc = new RTCSessionDescription(remoteDescription);
-	peer.setRemoteDescription(
-		desc,
-		() => {
-			if (remoteDescription.type == "offer") {
-				peer.createAnswer(
-					(localDescription) => {
-						// Prefer H.264 in SDP for Safari compatibility (Safari only supports H.264 for video)
-						localDescription.sdp = preferH264(localDescription.sdp);
-						peer.setLocalDescription(
-							localDescription,
-							() =>
-								signalingSocket.emit("relaySessionDescription", {
-									peer_id,
-									session_description: localDescription,
-								}),
-							() => console.log("Answer setLocalDescription failed!")
-						);
-					},
-					(error) => console.log("Error creating answer: ", error)
-				);
+	console.log('Setting up peer event listeners...');
+
+	// Peer events
+	webrtcManager.on('peerAdded', handleEvent('peerAdded', ({ peerId, peerData }) => {
+		console.log('peer.js: Processing peerAdded event', peerId, peerData);
+			// Use Vue.set or modern reactive assignment to ensure reactivity
+			if (window.Vue && Vue.set) {
+				Vue.set(App.peers, peerId, {
+					rtc: webrtcManager.peers[peerId].rtc,
+					stream: null,
+					data: peerData
+				});
+			} else {
+				// For Vue 3, direct assignment should work with reactive objects
+				App.peers[peerId] = {
+					rtc: webrtcManager.peers[peerId].rtc,
+					stream: null,
+					data: peerData
+				};
+				// Force reactivity update
+				App.$forceUpdate?.();
 			}
-		},
-		(error) => console.log("setRemoteDescription error: ", error)
-	);
-};
+			// Ensure dataChannels are also synchronized
+			if (webrtcManager.dataChannels[peerId]) {
+				App.dataChannels[peerId] = webrtcManager.dataChannels[peerId];
+			}
+		console.log('peer.js: Added to App.peers:', peerId, peerData, 'Total peers:', Object.keys(App.peers).length);
+	}));
 
-const handleIceCandidate = (config) => {
-	const peer = App.peers[config.peer_id]["rtc"];
-	const iceCandidate = config.ice_candidate;
-	peer.addIceCandidate(new RTCIceCandidate(iceCandidate)).catch((error) => {
-		console.log("Error addIceCandidate", error);
-	});
-};
-
-const cleanupPeer = (peer_id) => {
-	if (peer_id in App.peers) {
-		App.peers[peer_id]["rtc"].close();
-	}
-	delete App.dataChannels[peer_id];
-	delete App.peers[peer_id];
-	removeAudioStream(peer_id);
-};
-
-const cleanupAllPeers = () => {
-	Object.keys(App.peers).forEach((peer_id) => {
-		App.peers[peer_id]["rtc"].close();
-	});
-	App.peers = {};
-};
-
-const joinChatChannel = (channel, userData) => signalingSocket.emit("join", { channel, userData });
-
-window.initiateCall = () => {
-	App.userAgent = navigator.userAgent;
-	signalingSocket = io(SIGNALLING_SERVER);
-	window.signalingSocket = signalingSocket; /* expose for global access */
-
-	signalingSocket.on("connect", () => {
-		App.peerId = signalingSocket.id;
-		const userData = { peerName: App.name, userAgent: App.userAgent };
-
-		if (App.localMediaStream) {
-			joinChatChannel(App.channelId, userData);
+	webrtcManager.on('peerStreamReady', handleEvent('peerStreamReady', ({ peerId, stream }) => {
+		console.log('peer.js: Processing peerStreamReady event', peerId);
+		if (App.peers[peerId]) {
+			App.peers[peerId].stream = stream;
+			// Force reactivity update for stream changes
+			App.$forceUpdate?.();
+			console.log('peer.js: Stream added to peer:', peerId);
 		} else {
-			setupLocalMedia(() => joinChatChannel(App.channelId, userData));
+			console.warn('peer.js: Peer not found when setting stream', peerId, 'Available peers:', Object.keys(App.peers || {}));
+		}
+	}));
+
+	webrtcManager.on('peerRemoved', handleEvent('peerRemoved', ({ peerId }) => {
+		console.log('peer.js: Processing peerRemoved event', peerId);
+		if (App.peers[peerId]) {
+			delete App.peers[peerId];
+			// Force reactivity update
+			App.$forceUpdate?.();
+			console.log('peer.js: Removed from App.peers:', peerId);
+		}
+		if (App.dataChannels[peerId]) {
+			delete App.dataChannels[peerId];
+		}
+		console.log('peer.js: Peer removed from all structures:', peerId, 'Remaining peers:', Object.keys(App.peers || {}).length);
+	}));
+
+	webrtcManager.on('allPeersRemoved', () => {
+		if (window.App) {
+			App.peers = {};
+			App.dataChannels = {};
 		}
 	});
 
-	signalingSocket.on("disconnect", cleanupAllPeers);
-
-	signalingSocket.on("addPeer", (config) => {
-		const peer_id = config.peer_id;
-		if (peer_id in App.peers) return;
-
-		const peerConnection = createPeerConnection();
-		App.peers[peer_id] = { ...App.peers[peer_id], data: config.channel[peer_id].userData };
-		App.peers[peer_id]["rtc"] = peerConnection;
-
-		setupPeerConnectionHandlers(peerConnection, peer_id);
-		addLocalTracksToPeer(peerConnection);
-		App.dataChannels[peer_id] = peerConnection.createDataChannel("ot__data_channel");
-
-		if (config.should_create_offer) {
-			setupOfferCreation(peerConnection, peer_id);
+	webrtcManager.on('peerTalking', ({ peerId, isTalking }) => {
+		if (window.App && App.setTalkingPeer) {
+			App.setTalkingPeer(peerId, isTalking);
 		}
 	});
 
-	signalingSocket.on("sessionDescription", handleSessionDescription);
-	signalingSocket.on("iceCandidate", handleIceCandidate);
-	signalingSocket.on("removePeer", (config) => cleanupPeer(config.peer_id));
+	webrtcManager.on('peerNameChanged', ({ peerId, name }) => {
+		if (window.App && App.peers[peerId]) {
+			App.peers[peerId].data.peerName = name;
+		}
+	});
+
+	// Connection events
+	webrtcManager.on('connected', ({ peerId }) => {
+		if (window.App) {
+			App.peerId = peerId;
+		}
+		// Expose signaling socket for backward compatibility
+		window.signalingSocket = webrtcManager.signalingSocket;
+	});
+
+	webrtcManager.on('disconnected', () => {
+		window.signalingSocket = null;
+	});
+
+	// Data channel events
+	webrtcManager.on('dataChannelMessage', (dataMessage) => {
+		if (window.App && App.handleIncomingDataChannelMessage) {
+			App.handleIncomingDataChannelMessage(dataMessage);
+		}
+	});
+
+	// Error handling
+	webrtcManager.on('error', ({ type, error }) => {
+		console.error(`WebRTC Error (${type}):`, error);
+		if (window.App && App.setToast) {
+			switch (type) {
+				case 'mediaAccess':
+					App.setToast("Unable to access camera/microphone");
+					break;
+				case 'deviceEnumeration':
+					App.setToast("Failed to enumerate media devices");
+					break;
+				default:
+					App.setToast(`WebRTC Error: ${type}`);
+			}
+		}
+	});
+
+	// Device enumeration
+	webrtcManager.on('devicesEnumerated', ({ audioDevices, videoDevices }) => {
+		if (window.App) {
+			App.audioDevices = audioDevices;
+			App.videoDevices = videoDevices;
+
+			// Set default device ids
+			const defaultAudioDeviceId = audioDevices.find((device) => device.deviceId === "default")?.deviceId;
+			const defaultVideoDeviceId = videoDevices.find((device) => device.deviceId === "default")?.deviceId;
+
+			App.selectedAudioDeviceId = defaultAudioDeviceId ?? audioDevices[0]?.deviceId;
+			App.selectedVideoDeviceId = defaultVideoDeviceId ?? videoDevices[0]?.deviceId;
+
+			// Update the manager's settings
+			webrtcManager.selectedAudioDeviceId = App.selectedAudioDeviceId;
+			webrtcManager.selectedVideoDeviceId = App.selectedVideoDeviceId;
+		}
+	});
+
+	// Call state events
+	webrtcManager.on('callInitiated', () => {
+		// Call initiated event
+	});
+
+	webrtcManager.on('callEnded', () => {
+		// Call ended event
+	});
+}
+
+// Legacy compatibility functions
+window.initiateCall = async function() {
+	if (!webrtcManager) {
+		webrtcManager = initializeWebRTCManager();
+	}
+
+	// Sync settings from App if available
+	if (window.App) {
+		webrtcManager.audioEnabled = App.audioEnabled;
+		webrtcManager.videoEnabled = App.videoEnabled;
+		webrtcManager.selectedAudioDeviceId = App.selectedAudioDeviceId;
+		webrtcManager.selectedVideoDeviceId = App.selectedVideoDeviceId;
+		webrtcManager.name = App.name;
+
+		// Update dataChannels reference
+		App.dataChannels = webrtcManager.dataChannels;
+	}
+
+	const config = {
+		channelId: window.App?.channelId || window.location.pathname.substr(1),
+		name: webrtcManager.name,
+		signalingServer: window.location.origin
+	};
+
+	try {
+		await webrtcManager.initiateCall(config);
+	} catch (error) {
+		console.error('Failed to initiate call:', error);
+		if (window.App && App.setToast) {
+			App.setToast("Failed to start call");
+		}
+	}
 };
 
+// Legacy function for setting up local media (now handled by WebRTC manager)
 function setupLocalMedia(callback) {
-	if (App.localMediaStream != null) {
+	if (!webrtcManager) {
+		webrtcManager = initializeWebRTCManager();
+	}
+
+	// Sync settings from App
+	if (window.App) {
+		webrtcManager.audioEnabled = App.audioEnabled;
+		webrtcManager.videoEnabled = App.videoEnabled;
+		webrtcManager.selectedAudioDeviceId = App.selectedAudioDeviceId;
+		webrtcManager.selectedVideoDeviceId = App.selectedVideoDeviceId;
+	}
+
+	if (webrtcManager.localMediaStream) {
 		if (callback) callback();
 		return;
 	}
 
-	// Build constraints based on settings
-	const constraints = {
-		audio: App.audioEnabled ? (App.selectedAudioDeviceId ? { deviceId: App.selectedAudioDeviceId } : true) : false,
-		video: App.videoEnabled ? (App.selectedVideoDeviceId ? { deviceId: App.selectedVideoDeviceId } : true) : false,
-	};
-
-	navigator.mediaDevices
-		.getUserMedia(constraints)
+	webrtcManager.getUserMedia()
 		.then((stream) => {
-			App.localMediaStream = stream;
-
 			if (callback) callback();
 		})
 		.catch((error) => {
-			console.error(error);
-			App.setToast("Unable to get microphone access.");
+			console.error('setupLocalMedia error:', error);
+			if (window.App && App.setToast) {
+				App.setToast("Unable to get microphone access.");
+			}
 		});
 }
 
-function handleAudioStream(stream, peerId) {
-	// Is peer talking analyser from https://www.linkedin.com/pulse/webrtc-active-speaker-detection-nilesh-gawande/
-	const audioContext = new AudioContext();
-	const mediaStreamSource = audioContext.createMediaStreamSource(stream);
-	const analyserNode = audioContext.createAnalyser();
-	analyserNode.fftSize = AUDIO_WINDOW_SIZE;
-	mediaStreamSource.connect(analyserNode);
-	const bufferLength = analyserNode.frequencyBinCount;
-	const dataArray = new Uint8Array(bufferLength);
-
-	function processAudio() {
-		analyserNode.getByteFrequencyData(dataArray);
-		const averageVolume = dataArray.reduce((acc, val) => acc + val, 0) / bufferLength;
-		App.setTalkingPeer(peerId, averageVolume > VOLUME_THRESHOLD);
-		requestAnimationFrame(processAudio);
+// Export the manager instance for direct access if needed
+window.getWebRTCManager = function() {
+	if (!webrtcManager) {
+		webrtcManager = initializeWebRTCManager();
 	}
+	return webrtcManager;
+};
 
-	processAudio();
-	audioStreams.set(peerId, { stream, analyserNode });
-}
+// Export markAppReady function for Vue app to call
+window.markAppReady = markAppReady;
 
-function removeAudioStream(peerId) {
-	const streamData = audioStreams.get(peerId);
-	if (streamData) {
-		streamData.stream.getTracks().forEach((track) => track.stop());
-		streamData.analyserNode.disconnect();
-		audioStreams.delete(peerId);
-	}
+// Initialize on load
+if (typeof window !== 'undefined') {
+	// Auto-initialize when the script loads
+	webrtcManager = initializeWebRTCManager();
+
+	// Poll for Vue app readiness as fallback
+	const pollForApp = () => {
+		if (!appReady && window.App) {
+			console.log('peer.js: Vue App detected via polling');
+			markAppReady();
+		} else if (!appReady) {
+			console.log('peer.js: Still polling for Vue App... window.App:', !!window.App, 'appReady:', appReady);
+			setTimeout(pollForApp, 500);
+		}
+	};
+
+	// Start polling after a short delay
+	setTimeout(pollForApp, 100);
 }

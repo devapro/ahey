@@ -9,9 +9,17 @@
 					{{toast.message}}
 				</section>
 
-				<!-- Video and screen sharing UI removed -->
+				<!-- Connected peers list -->
+					<section id="peers-list" v-if="callInitiated && peersArray.length">
+						<ul style="list-style:none; padding:0; margin:1rem 0; display:flex; gap:1rem; justify-content:center;">
+							<li v-for="peer in peersArray" :key="peer.name" style="display:flex;align-items:center;gap:0.5rem;">
+								<i :class="['icon-mic', peer.isTalking ? 'green' : '']" style="font-size:1.5rem;"></i>
+								<span>{{ peer.name }}</span>
+								   <audio v-if="peer.stream" v-stream="peer.stream" autoplay playsinline></audio>
+							</li>
+						</ul>
+					</section>
 
-				<!-- Controls and chat/video/screen sharing UI removed. Only audio controls remain. -->
 				<div id="blanket" v-if="showExtraControls" @click="resetPopups"></div>
 				<section id="controls">
 					<section id="extra" v-if="showExtraControls">

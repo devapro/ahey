@@ -28,15 +28,15 @@ const App = Vue.createApp({
 	       };
        },
 	computed: {
-		peersArray() {
-			return Object.keys(this.peers)
-				.filter((p) => this.peers[p].data.userAgent)
-				.map((peer) => ({
-					stream: this.peers[peer].stream,
-					name: this.peers[peer].data.peerName,
-					isTalking: this.peers[peer].data.isTalking,
-				}));
-		},
+		   peersArray() {
+			   return Object.keys(this.peers)
+				   .map((peer) => ({
+					   stream: this.peers[peer].stream,
+					   name: (this.peers[peer].data && this.peers[peer].data.peerName) || peer,
+					   isTalking: this.peers[peer].data && this.peers[peer].data.isTalking,
+				   }))
+				   .filter((p) => p.stream);
+		   },
 	},
 	watch: {
 		callInitiated(newValue, oldValue) {
@@ -214,12 +214,17 @@ const App = Vue.createApp({
 			       if (this.localMediaStream) {
 				       this.localMediaStream.getTracks().forEach((track) => track.stop());
 			       }
+			       if (!this.audioEnabled) {
+				       // Don't call getUserMedia with empty constraints
+				       const tracks = [this.getBlankTrack("audio")];
+				       this.localMediaStream = new MediaStream(tracks);
+				       this.setToast("Microphone is disabled");
+				       return;
+			       }
 			       const constraints = {
-				       audio: this.audioEnabled
-					       ? this.selectedAudioDeviceId
-						       ? { deviceId: this.selectedAudioDeviceId }
-						       : true
-					       : false,
+				       audio: this.selectedAudioDeviceId
+					       ? { deviceId: this.selectedAudioDeviceId }
+					       : true,
 			       };
 			       this.localMediaStream = await navigator.mediaDevices.getUserMedia(constraints);
 
@@ -234,13 +239,30 @@ const App = Vue.createApp({
 			       this.setToast("Unable to access microphone");
 		       }
 	       },
+       setTalkingPeer(peerId, isTalking) {
+	       if (this.peers[peerId] && this.peers[peerId].data) {
+		       this.peers[peerId].data.isTalking = isTalking;
+	       }
+       },
 	},
 	mounted() {
 		// if (!this.callInitiated) {
 		// 	this.getPreCallMedia(); ///????
 		// }
 	},
-}).mount("#app");
+});
+
+// Custom directive to bind MediaStream to audio elements
+App.directive('stream', {
+	mounted(el, binding) {
+		el.srcObject = binding.value;
+	},
+	updated(el, binding) {
+		el.srcObject = binding.value;
+	}
+});
+
+App.mount("#app");
 
 // Register service worker for PWA functionality
 // if ("serviceWorker" in navigator) {

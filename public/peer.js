@@ -174,7 +174,6 @@ const cleanupAllPeers = () => {
 		App.peers[peer_id]["rtc"].close();
 	});
 	App.peers = {};
-	App.cleanupScreenShare();
 };
 
 const joinChatChannel = (channel, userData) => signalingSocket.emit("join", { channel, userData });

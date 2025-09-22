@@ -9,7 +9,6 @@ const App = Vue.createApp({
 		const searchParams = new URLSearchParams(window.location.search);
 
 		const name = searchParams.get("name");
-		const chatEnabled = searchParams.get("chat") !== "false";
 
 		return {
 			channelId,
@@ -24,14 +23,8 @@ const App = Vue.createApp({
 			name: name ?? window.localStorage.name,
 			callInitiated: false,
 			localMediaStream: null,
-			screenShareStream: null,
-			isScreenSharing: false,
 			peers: {},
 			dataChannels: {},
-			chatEnabled,
-			chats: [],
-			chatMessage: "",
-			showChat: false,
 			showExtraControls: false,
 			showAudioDevices: false,
 			showVideoDevices: false,
@@ -48,9 +41,6 @@ const App = Vue.createApp({
 					isTalking: this.peers[peer].data.isTalking,
 				}));
 		},
-		screenShareSupported() {
-			return navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia;
-		},
 		videoLayoutClass() {
 			const totalParticipants = this.peersArray.length + 1; // +1 for self
 
@@ -63,25 +53,11 @@ const App = Vue.createApp({
 			return "layout-7-plus";
 		},
 	},
-	watch: {
-		callInitiated(newValue, oldValue) {
-			if (oldValue && !newValue) {
-				// Call ended, clean up screen sharing
-				this.cleanupScreenShare();
-			}
-		},
-	},
 	methods: {
-		toggleChat() {
-			this.showChat = !this.showChat;
-			this.showExtraControls = false;
-		},
 		toggleExtraControls() {
 			this.showExtraControls = !this.showExtraControls;
-			this.showChat = false;
 		},
 		resetPopups() {
-			this.showChat = false;
 			this.showExtraControls = false;
 			this.showAudioDevices = false;
 			this.showVideoDevices = false;
@@ -250,94 +226,6 @@ const App = Vue.createApp({
 				this.localMediaStream.addTrack(newAudioTrack);
 			}
 		},
-		async startScreenShare() {
-			try {
-				// Get screen share stream
-				const screenStream = await navigator.mediaDevices.getDisplayMedia({
-					video: {
-						cursor: "always",
-						displaySurface: "monitor",
-					},
-					audio: false,
-				});
-
-				// Check if stream has video tracks
-				if (!screenStream.getVideoTracks().length) {
-					screenStream.getTracks().forEach((track) => track.stop());
-					this.setToast("No video track found in screen share");
-					return;
-				}
-
-				this.screenShareStream = screenStream;
-				this.isScreenSharing = true;
-
-				// Handle screen share stop
-				screenStream.getVideoTracks()[0].onended = () => {
-					this.stopScreenShare();
-				};
-
-				// Replace video track with screen share track
-				const screenVideoTrack = screenStream.getVideoTracks()[0];
-				this.replaceVideoTrack(screenVideoTrack);
-
-				this.setToast("Screen sharing started", "success");
-			} catch (error) {
-				console.error("Error starting screen share:", error);
-				if (error.name === "NotAllowedError") {
-					this.setToast("Screen sharing permission denied");
-				} else if (error.name === "NotSupportedError") {
-					this.setToast("Screen sharing not supported in this browser");
-				} else if (error.name === "AbortError") {
-					// User cancelled the screen share dialog
-				} else {
-					this.setToast("Failed to start screen sharing");
-				}
-			}
-		},
-
-		async stopScreenShare() {
-			try {
-				if (this.screenShareStream) {
-					// Stop all tracks in screen share stream
-					this.screenShareStream.getTracks().forEach((track) => track.stop());
-					this.screenShareStream = null;
-				}
-
-				this.isScreenSharing = false;
-
-				// Get new video stream with the selected video device
-				const newVideoStream = await navigator.mediaDevices.getUserMedia({
-					audio: false,
-					video: { deviceId: { exact: this.selectedVideoDeviceId } },
-				});
-
-				// Replace video track with camera track
-				const newVideoTrack = newVideoStream.getVideoTracks()[0];
-				this.replaceVideoTrack(newVideoTrack);
-
-				this.setToast("Screen sharing stopped", "success");
-			} catch (error) {
-				console.error("Error stopping screen share:", error);
-				this.setToast("Failed to stop screen sharing");
-			}
-		},
-
-		toggleScreenShare() {
-			if (this.isScreenSharing) {
-				this.stopScreenShare();
-			} else {
-				this.startScreenShare();
-			}
-			this.showExtraControls = false;
-		},
-
-		cleanupScreenShare() {
-			if (this.screenShareStream) {
-				this.screenShareStream.getTracks().forEach((track) => track.stop());
-				this.screenShareStream = null;
-			}
-			this.isScreenSharing = false;
-		},
 
 		async initiateCall() {
 			await this.getPreCallMedia(); 
@@ -425,11 +313,7 @@ const App = Vue.createApp({
 			this.peers = {};
 			this.dataChannels = {};
 			this.callInitiated = false;
-			this.chats = [];
-			this.showChat = false;
 
-			// Clean up screen sharing
-			this.cleanupScreenShare();
 
 			// Show toast
 			this.setToast("Call ended", "success");
@@ -451,52 +335,11 @@ const App = Vue.createApp({
 		updateUserData(key, value) {
 			this.sendDataMessage(key, value);
 		},
-		formatDate(dateString) {
-			const date = new Date(dateString);
-			const hours = date.getHours() > 12 ? date.getHours() - 12 : date.getHours();
-			return (
-				(hours < 10 ? "0" + hours : hours) +
-				":" +
-				(date.getMinutes() < 10 ? "0" + date.getMinutes() : date.getMinutes()) +
-				" " +
-				(date.getHours() >= 12 ? "PM" : "AM")
-			);
-		},
-		sanitizeString(str) {
-			const tagsToReplace = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
-			const replaceTag = (tag) => tagsToReplace[tag] || tag;
-			const safe_tags_replace = (str) => str.replace(/[&<>]/g, replaceTag);
-			return safe_tags_replace(str);
-		},
-		linkify(str) {
-			return this.sanitizeString(str).replace(/(?:(?:https?|ftp):\/\/)?[\w/\-?=%.]+\.[\w/\-?=%]+/gi, (match) => {
-				let displayURL = match.trim().replace("https://", "").replace("https://", "");
-				displayURL = displayURL.length > 25 ? displayURL.substr(0, 25) + "&hellip;" : displayURL;
-				const url = !/^https?:\/\//i.test(match) ? "http://" + match : match;
-				return `<a href="${url}" target="_blank" class="link" rel="noopener">${displayURL}</a>`;
-			});
-		},
-		sendChat(e) {
-			e.stopPropagation();
-			e.preventDefault();
-
-			if (!this.chatMessage.length) return;
-
-			if (Object.keys(this.peers).length > 0) {
-				this.sendDataMessage("chat", this.chatMessage);
-				this.chatMessage = "";
-			} else {
-				alert("No peers in the room");
-			}
-		},
 		sendDataMessage(key, value) {
 			const date = new Date().toISOString();
 			const dataMessage = { type: key, name: this.name, peerId: this.peerId, message: value, date };
 
 			switch (key) {
-				case "chat":
-					this.chats.push(dataMessage);
-					break;
 				default:
 					break;
 			}
@@ -513,10 +356,6 @@ const App = Vue.createApp({
 			switch (dataMessage.type) {
 				case "peerName":
 					this.peers[dataMessage.peerId].data.peerName = dataMessage.message;
-					break;
-				case "chat":
-					this.showChat = true;
-					this.chats.push(dataMessage);
 					break;
 				default:
 					break;
@@ -601,19 +440,6 @@ const App = Vue.createApp({
 					videoElem.srcObject = this.localMediaStream;
 				}
 				this.setToast("Unable to access camera/mic");
-			}
-		},
-		requestFullscreen(videoElem) {
-			if (!videoElem) return;
-			const el = Array.isArray(videoElem) ? videoElem[0] : videoElem;
-			if (el.requestFullscreen) {
-				el.requestFullscreen();
-			} else if (el.webkitRequestFullscreen) {
-				el.webkitRequestFullscreen();
-			} else if (el.mozRequestFullScreen) {
-				el.mozRequestFullScreen();
-			} else if (el.msRequestFullscreen) {
-				el.msRequestFullscreen();
 			}
 		},
 	},

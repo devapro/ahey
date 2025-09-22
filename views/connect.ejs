@@ -36,9 +36,6 @@
 								autoplay
 								playsinline
 							></video>
-							<button class="fullscreen-btn" @click="requestFullscreen($refs['peerVideo' + i])">
-								<i class="icon-maximize"></i>
-							</button>
 							<div class="meta">
 								{{peer.name}}
 								<i v-bind:class="'green icon-mic'" v-if="peer.isTalking"></i>
@@ -47,7 +44,7 @@
 					</div>
 				</section>
 
-				<div id="blanket" v-if="showExtraControls || showChat" @click="resetPopups"></div>
+				<div id="blanket" v-if="showExtraControls" @click="resetPopups"></div>
 				<secion id="controls">
 					<section id="extra" v-if="showExtraControls">
 						<ul>
@@ -81,31 +78,11 @@
 								{{videoDevice.label}}
 							</li>
 
-							<li class="action" v-if="screenShareSupported && callInitiated" v-on:click="toggleScreenShare">
-								<i class="icon-screen"></i> Start screenshare
-							</li>
 							<li class="action" @click="copyURL"><i class="icon-link"></i> Copy channel URL</li>
 							<li class="action red" @click="endCall" v-if="callInitiated"><i class="icon-phone-off"></i> Leave</li>
 						</ul>
 					</section>
 
-					<section id="chats" v-if="callInitiated && showChat">
-						<div id="scroll">
-							<div class="chat" v-for="(chat, i) in chats" v-bind:key="i">
-								<div><span class="name">{{chat.name}}:</span> <span v-html="linkify(chat.message)"></span></div>
-								<div class="date">{{formatDate(chat.date)}}</div>
-							</div>
-						</div>
-
-						<div class="chat">
-							<textarea
-								v-model="chatMessage"
-								rows="1"
-								v-on:keydown.enter="sendChat"
-								placeholder="Enter your message"
-							></textarea>
-						</div>
-					</section>
 
 					<section id="name" v-if="!callInitiated && !showExtraControls">
 						<!-- <input
@@ -127,9 +104,7 @@
 						<button @click="callInitiated ? toggleVideo() : togglePreCallVideo()">
 							<i :class="'icon-video'+(videoEnabled ? '' : '-off')"></i>
 						</button>
-						<button @click="toggleChat" v-if="callInitiated && chatEnabled"><i class="icon-chat"></i></button>
-						<button @click="toggleScreenShare" v-if="isScreenSharing" class="red"><i class="icon-screen"></i></button>
-						<button @click="toggleExtraControls"><i class="icon-more-vertical"></i></button>
+								<button @click="toggleExtraControls"><i class="icon-more-vertical"></i></button>
 						<!-- <button class="join" v-if="!callInitiated" v-on:click="initiateCall">
 							<i class="icon-phone"></i>&nbsp;Join
 						</button> -->

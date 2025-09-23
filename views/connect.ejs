@@ -108,7 +108,7 @@
 						<!-- <button class="join" v-if="!callInitiated" v-on:click="initiateCall">
 							<i class="icon-phone"></i>&nbsp;Join
 						</button> -->
-						<button class="join" v-if="!callInitiated" v-on:click="autoInitiateCall">
+						<button class="join" v-if="!callInitiated" v-on:click="initiateCall">
 							<i class="icon-phone"></i>&nbsp;Connect
 						</button>
 					</section>
@@ -117,12 +117,3 @@
 		</main>
 	</body>
 </html>
-<!-- <script>
-	window.addEventListener('DOMContentLoaded', function() {
-		setTimeout(function() {
-			if (typeof App !== 'undefined' && App.autoInitiateCall) {
-				App.autoInitiateCall();
-			}
-		}, 2000);
-	});
-</script> -->

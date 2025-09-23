@@ -231,16 +231,7 @@ const App = Vue.createApp({
 				this.localMediaStream.addTrack(newAudioTrack);
 			}
 		},
-
-		async initiateCall() {
-			await this.getPreCallMedia(); 
-			if (!this.channelId) return alert("Invalid channel id");
-			if (!this.name) return alert("Please enter your name");
-			this.callInitiated = true;
-			this.showExtraControls - false;
-			window.initiateCall();
-		},
-	    async autoInitiateCall() {
+	    async initiateCall() {
 			await this.getPreCallMedia(); 
 			if (this.audioDevices.length === 0 ) {
 				alert("Check microphone permissions and reload the page");
@@ -253,9 +244,14 @@ const App = Vue.createApp({
 				}, 2000);
 				return;
 			}
-			this.channelId = window.location.pathname.substr(1);
-			const deviceName = hash(navigator.userAgent);
-			this.name = deviceName || "Guest";
+			if (!this.channelId) {
+				this.channelId = window.location.pathname.substr(1);
+			}
+			if (!this.name) {
+				const deviceName = hash(navigator.userAgent);
+				this.name = deviceName || "Guest";
+			}
+			
 			this.callInitiated = true;
 			this.showExtraControls - false;
 			window.initiateCall();

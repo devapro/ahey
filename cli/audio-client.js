@@ -722,11 +722,14 @@ Usage:
 			});
 
 			// Add an audio track to send to the peer
-			if (nodeDatachannel.Audio) {
+			if (nodeDatachannel.Audio && recorder) {
 				const audioTrack = new nodeDatachannel.Audio('audio');
 				audioTrack.addOpusCodec(96); // Add Opus codec support
 				peerConnection.addTrack(audioTrack);
 				console.log(`🎤 Added audio track for: ${this.peers[peerId]?.name || peerId}`);
+
+				// Set up microphone input for this track
+				this.setupMicrophoneForTrack(audioTrack, peerId);
 			}
 
 			// Handle incoming audio tracks
@@ -762,17 +765,21 @@ Usage:
 			// Store the speaker for this peer
 			this.speakers[peerId] = speaker;
 
-			// Set up media handler for the track to receive RTP audio packets
+			// Set up media handler for the track to receive audio data
 			track.setMediaHandler({
 				onSample: (sample) => {
+					console.log(`🎵 Received audio sample from ${peerId}, size: ${sample ? sample.length : 'null'}`);
 					if (this.speakers[peerId] && sample) {
 						try {
 							// Write PCM audio data to the speaker
 							this.speakers[peerId].write(sample);
 						} catch (error) {
-							console.error(`❌ Audio playback error for ${peerId}:`, error.message);
+							console.error(`❌ Audio playbook error for ${peerId}:`, error.message);
 						}
 					}
+				},
+				onFrame: (frame) => {
+					console.log(`🎬 Received audio frame from ${peerId}, size: ${frame ? frame.length : 'null'}`);
 				}
 			});
 
@@ -786,6 +793,56 @@ Usage:
 
 		} catch (error) {
 			console.error(`❌ Error setting up audio playback for ${peerId}:`, error.message);
+		}
+	}
+
+	setupMicrophoneForTrack(audioTrack, peerId) {
+		if (!recorder) {
+			console.log('⚠️  Recorder not available for microphone input');
+			return;
+		}
+
+		console.log(`🎙️  Setting up microphone for: ${this.peers[peerId]?.name || peerId}`);
+
+		try {
+			// Create a microphone recording stream
+			const micStream = recorder.record({
+				sampleRateHertz: 48000,     // 48kHz sample rate (Opus standard)
+				threshold: 0,               // Silence threshold (0 = no threshold)
+				verbose: false,             // Don't show verbose output
+				recordProgram: 'rec',       // Use 'rec' command for recording
+				silence: '1.0',             // Stop after 1 second of silence
+				channels: 1                 // Mono audio
+			});
+
+			// Set up media handler to send microphone data to the track
+			audioTrack.setMediaHandler({
+				onSample: (sample) => {
+					// This would be called when we need to send audio
+					// For now, we'll use the stream data directly
+				}
+			});
+
+			// Pipe microphone data to the audio track
+			micStream.stream().on('data', (audioData) => {
+				try {
+					// Send microphone data to the audio track
+					// Note: This may need format conversion depending on node-datachannel requirements
+					audioTrack.sendMessage(audioData);
+				} catch (error) {
+					console.error(`❌ Error sending microphone data for ${peerId}:`, error.message);
+				}
+			});
+
+			micStream.stream().on('error', (error) => {
+				console.error(`❌ Microphone error for ${peerId}:`, error.message);
+			});
+
+			// Store the microphone stream for cleanup
+			this.microphoneStream = micStream;
+
+		} catch (error) {
+			console.error(`❌ Error setting up microphone for ${peerId}:`, error.message);
 		}
 	}
 
@@ -911,6 +968,11 @@ Usage:
 		// Clean up ICE candidate buffering
 		delete this.pendingCandidates[peerId];
 		delete this.remoteDescriptionSet[peerId];
+		// Clean up microphone stream
+		if (this.microphoneStream) {
+			this.microphoneStream.stop();
+			this.microphoneStream = null;
+		}
 	}
 
 	quit() {

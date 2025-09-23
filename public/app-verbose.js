@@ -12,6 +12,7 @@ const App = Vue.createApp({
 		return {
 			channelId,
 			peerId: "",
+			userAgent: "",
 			audioDevices: [],
 			audioEnabled: true,
 			selectedAudioDeviceId: null,
@@ -20,10 +21,10 @@ const App = Vue.createApp({
 			localMediaStream: null,
 			peers: {},
 			dataChannels: {},
-			peerAudioElements: {},
+			peerAudioElements: {}, // Store Audio() objects for each peer
 			showExtraControls: false,
 			showAudioDevices: false,
-			toast: { type: "", message: "" },
+			toast: [{ type: "", message: "" }],
 		};
 	},
 	computed: {
@@ -50,50 +51,55 @@ const App = Vue.createApp({
 			this.showExtraControls = false;
 			this.showAudioDevices = false;
 		},
-		async toggleAudio() {
-			const existingTrack = this.localMediaStream?.getAudioTracks()[0];
+		async toggleMedia(kind) {
+			if (kind !== "audio") return; // Only handle audio
 
-			if (existingTrack && this.audioEnabled) {
+			const enabledKey = "audioEnabled";
+			const selectedDeviceIdKey = "selectedAudioDeviceId";
+			const getTracks = "getAudioTracks";
+			const replaceTrackMethod = "replaceAudioTrack";
+
+			const existingTrack = this.localMediaStream[getTracks]()[0];
+
+			if (existingTrack && this[enabledKey]) {
 				existingTrack.enabled = false;
-				this.audioEnabled = false;
+				this[enabledKey] = false;
 				existingTrack.stop();
-				this.replaceAudioTrackInConnections(this.getBlankTrack());
+				this.removeMediaTrack(kind);
 			} else {
 				try {
-					const constraints = {
-						audio: this.selectedAudioDeviceId
-							? { deviceId: { exact: this.selectedAudioDeviceId } }
-							: true,
-						video: false
-					};
+					const constraints = { audio: { deviceId: { exact: this[selectedDeviceIdKey] } }, video: false };
 					const newStream = await navigator.mediaDevices.getUserMedia(constraints);
-					const newTrack = newStream.getAudioTracks()[0];
-					this.replaceAudioTrackInConnections(newTrack);
-					this.audioEnabled = true;
+					const newTrack = newStream[getTracks]()[0];
+					this[replaceTrackMethod](newTrack);
+					this[enabledKey] = true;
 				} catch {
-					this.setToast("Failed to enable audio");
+					this.setToast(`Failed to enable ${kind}`);
 				}
 			}
 		},
-		async switchAudioDevice(newDeviceId) {
+		async switchMediaDevice(newDeviceId, kind) {
+			if (kind !== "audio") return; // Only handle audio
+
 			try {
 				const constraints = { audio: { deviceId: { exact: newDeviceId } }, video: false };
 				const newStream = await navigator.mediaDevices.getUserMedia(constraints);
-
+				const getTracks = "getAudioTracks";
+				const replaceTrackMethod = "replaceAudioTrack";
 				if (this.localMediaStream) {
-					const oldTrack = this.localMediaStream.getAudioTracks()[0];
+					const oldTrack = this.localMediaStream[getTracks]()[0];
 					if (oldTrack) oldTrack.stop();
 				}
-
-				const newTrack = newStream.getAudioTracks()[0];
-				this.replaceAudioTrackInConnections(newTrack);
-				this.setToast("Audio device changed successfully", "success");
+				const newTrack = newStream[getTracks]()[0];
+				this[replaceTrackMethod](newTrack);
+				this.setToast(`${kind.charAt(0).toUpperCase() + kind.slice(1)} device changed successfully`, "success");
 			} catch {
-				this.setToast("Failed to switch audio device");
+				this.setToast(`Failed to switch ${kind} device`);
 			}
 		},
-		replaceAudioTrackInConnections(newTrack) {
-			// Replace track in all peer connections
+		replaceMediaTrack(newTrack, kind) {
+			if (kind !== "audio") return; // Only handle audio
+
 			Object.keys(this.peers).forEach((peerId) => {
 				const peerConnection = this.peers[peerId].rtc;
 				const senders = peerConnection.getSenders();
@@ -105,20 +111,43 @@ const App = Vue.createApp({
 					this.triggerRenegotiation(peerId);
 				}
 			});
-
-			// Update local media stream
 			if (this.localMediaStream) {
 				const oldTrack = this.localMediaStream.getAudioTracks()[0];
 				if (oldTrack) this.localMediaStream.removeTrack(oldTrack);
 				this.localMediaStream.addTrack(newTrack);
 			}
 		},
+		removeMediaTrack(kind) {
+			if (kind !== "audio") return; // Only handle audio
+
+			const blankTrack = this.getBlankTrack(kind);
+			if (!blankTrack) return;
+
+			// Replace track in all peer connections
+			Object.keys(this.peers).forEach((peerId) => {
+				const peerConnection = this.peers[peerId].rtc;
+				const senders = peerConnection.getSenders();
+				const sender = senders.find((s) => s.track && s.track.kind === "audio");
+				if (sender) {
+					sender.replaceTrack(blankTrack);
+				}
+			});
+
+			// Replace in localMediaStream
+			if (this.localMediaStream) {
+				const oldTrack = this.localMediaStream.getAudioTracks()[0];
+				if (oldTrack) this.localMediaStream.removeTrack(oldTrack);
+				this.localMediaStream.addTrack(blankTrack);
+			}
+		},
 		async triggerRenegotiation(peerId) {
 			try {
 				const peerConnection = this.peers[peerId].rtc;
+
 				const offer = await peerConnection.createOffer();
 				await peerConnection.setLocalDescription(offer);
 
+				// Send the offer through the signaling server
 				if (window.signalingSocket) {
 					window.signalingSocket.emit("relaySessionDescription", {
 						peer_id: peerId,
@@ -129,12 +158,39 @@ const App = Vue.createApp({
 				console.error(`Error during renegotiation for peer ${peerId}:`, error);
 			}
 		},
+		replaceAudioTrack(newAudioTrack) {
+			// Replace audio track in all peer connections
+			Object.keys(this.peers).forEach((peerId) => {
+				const peerConnection = this.peers[peerId].rtc;
+				const senders = peerConnection.getSenders();
+				const audioSender = senders.find((sender) => sender.track && sender.track.kind === "audio");
+
+				if (audioSender) {
+					// Replace existing audio track
+					audioSender.replaceTrack(newAudioTrack);
+				} else {
+					// No existing audio sender, add new audio track
+					peerConnection.addTrack(newAudioTrack, this.localMediaStream);
+					// Trigger renegotiation for this peer
+					this.triggerRenegotiation(peerId);
+				}
+			});
+
+			// Update local media stream
+			if (this.localMediaStream) {
+				const oldAudioTrack = this.localMediaStream.getAudioTracks()[0];
+				if (oldAudioTrack) {
+					this.localMediaStream.removeTrack(oldAudioTrack);
+				}
+				this.localMediaStream.addTrack(newAudioTrack);
+			}
+		},
 		async initiateCall() {
 			await this.getPreCallMedia();
-
-			if (this.audioDevices.length === 0) {
+			if (this.audioDevices.length === 0 ) {
 				alert("Check microphone permissions and reload the page");
 				setTimeout(async () => {
+					// Enumerate devices once during pre-call flow if not already done
 					if (this.audioDevices.length === 0) {
 						await this.enumerateDevices();
 					}
@@ -142,11 +198,9 @@ const App = Vue.createApp({
 				}, 2000);
 				return;
 			}
-
 			if (!this.channelId) {
 				this.channelId = window.location.pathname.substr(1);
 			}
-
 			if (!this.name) {
 				const deviceName = hash(navigator.userAgent);
 				this.name = deviceName || "Guest";
@@ -170,6 +224,12 @@ const App = Vue.createApp({
 				() => console.error("Unable to copy channel URL")
 			);
 		},
+		toggleAudio() {
+			return this.toggleMedia("audio");
+		},
+		switchAudioDevice(newDeviceId) {
+			return this.switchMediaDevice(newDeviceId, "audio");
+		},
 		togglePreCallAudio() {
 			this.audioEnabled = !this.audioEnabled;
 			this.getPreCallMedia();
@@ -187,28 +247,39 @@ const App = Vue.createApp({
 			});
 			this.peerAudioElements = {};
 
+			// Reset call state
 			this.callInitiated = false;
+
+			// Show toast
 			this.setToast("Call ended", "success");
+
+			// Re-initialize pre-call preview
 			this.getPreCallMedia();
+		},
+		stopEvent(e) {
+			e.preventDefault();
+			e.stopPropagation();
 		},
 		updateName() {
 			window.localStorage.name = this.name;
 		},
 		updateNameAndPublish() {
 			window.localStorage.name = this.name;
-			this.sendDataMessage("peerName", this.name);
+			this.updateUserData("peerName", this.name);
 		},
-		sendDataMessage(type, message) {
-			const dataMessage = {
-				type,
-				name: this.name,
-				peerId: this.peerId,
-				message,
-				date: new Date().toISOString()
-			};
-			Object.keys(this.dataChannels).forEach((peerId) =>
-				this.dataChannels[peerId].send(JSON.stringify(dataMessage))
-			);
+		updateUserData(key, value) {
+			this.sendDataMessage(key, value);
+		},
+		sendDataMessage(key, value) {
+			const date = new Date().toISOString();
+			const dataMessage = { type: key, name: this.name, peerId: this.peerId, message: value, date };
+
+			switch (key) {
+				default:
+					break;
+			}
+
+			Object.keys(this.dataChannels).map((peer_id) => this.dataChannels[peer_id].send(JSON.stringify(dataMessage)));
 		},
 		setTalkingPeer(peerId, isTalking) {
 			if (this.peers[peerId] && this.peers[peerId].data.isTalking !== isTalking) {
@@ -217,10 +288,15 @@ const App = Vue.createApp({
 		},
 		handleIncomingDataChannelMessage(dataMessage) {
 			if (!this.peers[dataMessage.peerId]) return;
-			if (dataMessage.type === "peerName") {
-				this.peers[dataMessage.peerId].data.peerName = dataMessage.message;
+			switch (dataMessage.type) {
+				case "peerName":
+					this.peers[dataMessage.peerId].data.peerName = dataMessage.message;
+					break;
+				default:
+					break;
 			}
 		},
+		// Handle peer stream using Audio() objects instead of video tags
 		handlePeerStream(peerId, stream) {
 			console.log('Handling peer stream for:', peerId);
 
@@ -235,11 +311,14 @@ const App = Vue.createApp({
 			audioElement.srcObject = stream;
 			audioElement.autoplay = true;
 			audioElement.playsInline = true;
+
+			// Store reference
 			this.peerAudioElements[peerId] = audioElement;
 
 			// Handle play errors
 			audioElement.play().catch(error => {
 				console.error('Error playing peer audio:', error);
+				// Try to play again after user interaction
 				setTimeout(() => {
 					audioElement.play().catch(e => {
 						console.error('Failed to auto-play peer audio even after delay:', e);
@@ -247,6 +326,7 @@ const App = Vue.createApp({
 				}, 1000);
 			});
 		},
+		// Clean up peer audio when peer leaves
 		cleanupPeerAudio(peerId) {
 			if (this.peerAudioElements[peerId]) {
 				this.peerAudioElements[peerId].pause();
@@ -255,47 +335,53 @@ const App = Vue.createApp({
 			}
 		},
 		async enumerateDevices() {
+			// Request media permissions and enumerate devices
 			try {
 				const devices = await navigator.mediaDevices.enumerateDevices();
 				this.audioDevices = devices.filter((device) => device.kind === "audioinput");
 
-				const defaultAudioDeviceId = this.audioDevices.find((device) => device.deviceId === "default")?.deviceId;
+				// Set default device ids
+				const defaultAudioDeviceId = this.audioDevices.find((device) => device.deviceId == "default")?.deviceId;
 				this.selectedAudioDeviceId = defaultAudioDeviceId ?? this.audioDevices[0]?.deviceId;
 			} catch (error) {
 				console.error("Failed to initialize media devices:", error);
 			}
 		},
-		getBlankTrack() {
-			const ctx = new (window.AudioContext || window.webkitAudioContext)();
-			const oscillator = ctx.createOscillator();
-			const dst = ctx.createMediaStreamDestination();
-			oscillator.connect(dst);
-			oscillator.start();
-			oscillator.stop(ctx.currentTime + 0.01);
-			return dst.stream.getAudioTracks()[0];
+		getBlankTrack(kind) {
+			if (kind === "audio") {
+				const ctx = new (window.AudioContext || window.webkitAudioContext)();
+				const oscillator = ctx.createOscillator();
+				const dst = ctx.createMediaStreamDestination();
+				oscillator.connect(dst);
+				oscillator.start();
+				oscillator.stop(ctx.currentTime + 0.01);
+				return dst.stream.getAudioTracks()[0];
+			}
+			return null;
 		},
 		async getPreCallMedia() {
 			try {
 				if (this.localMediaStream) {
 					this.localMediaStream.getTracks().forEach((track) => track.stop());
 				}
-
 				const constraints = {
 					audio: this.audioEnabled
 						? this.selectedAudioDeviceId
 							? { deviceId: this.selectedAudioDeviceId }
 							: true
 						: false,
-					video: false,
+					video: false, // Never request video
 				};
 				this.localMediaStream = await navigator.mediaDevices.getUserMedia(constraints);
 
+				// Enumerate devices once during pre-call flow if not already done
 				if (this.audioDevices.length === 0) {
 					await this.enumerateDevices();
 				}
 			} catch {
+				// If user denies access, create blank tracks as needed
 				this.audioEnabled = false;
-				const tracks = [this.getBlankTrack()];
+				const tracks = [this.getBlankTrack("audio")];
 				this.localMediaStream = new MediaStream(tracks);
 				this.setToast("Unable to access microphone");
 			}
@@ -303,14 +389,13 @@ const App = Vue.createApp({
 	},
 	mounted() {
 		console.log('Vue App mounted! window.markAppReady available:', !!window.markAppReady);
-
+		// Notify peer.js that Vue App is ready
 		if (window.markAppReady) {
 			console.log('Vue App calling markAppReady()');
 			window.markAppReady();
 		} else {
 			console.warn('Vue App mounted but markAppReady not available');
 		}
-
 		if (!this.callInitiated) {
 			this.getPreCallMedia();
 		}
@@ -320,7 +405,7 @@ const App = Vue.createApp({
 			console.log('Auto-initiating call for /join URL');
 			setTimeout(() => {
 				this.initiateCall();
-			}, 1000);
+			}, 1000); // Small delay to ensure everything is initialized
 		}
 	},
 }).mount("#app");

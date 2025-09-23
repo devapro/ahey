@@ -1,0 +1,25 @@
+{
+  "name": "ahey-cli",
+  "version": "1.0.0",
+  "description": "Command line interface for Ahey audio calling",
+  "main": "audio-client.js",
+  "bin": {
+    "ahey": "./audio-client.js"
+  },
+  "scripts": {
+    "start": "node audio-client.js",
+    "test": "node audio-client.js help"
+  },
+  "dependencies": {
+    "ws": "^8.0.0"
+  },
+  "keywords": [
+    "webrtc",
+    "audio",
+    "calling",
+    "cli",
+    "p2p"
+  ],
+  "author": "",
+  "license": "MIT"
+}

@@ -444,6 +444,8 @@ const App = Vue.createApp({
 	},
 }).mount("#app");
 
+window.App = App;
+
 // Register service worker for PWA functionality
 if ("serviceWorker" in navigator) {
 	navigator.serviceWorker.register("/sw.js");

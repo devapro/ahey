@@ -20,6 +20,18 @@ try {
 	console.log('ℹ️  WebRTC modules not available. Running in basic mode.');
 }
 
+// Audio support
+let Speaker = null;
+let recorder = null;
+
+try {
+	Speaker = require('speaker');
+	recorder = require('node-record-lpcm16');
+	console.log('✅ Audio modules loaded successfully');
+} catch (error) {
+	console.log('ℹ️  Audio modules not available. Audio will be simulated.');
+}
+
 class AudioClient extends EventEmitter {
 	constructor() {
 		super();
@@ -36,6 +48,15 @@ class AudioClient extends EventEmitter {
 		this.serverUrls = ["wss://192.168.0.31:824", "wss://localhost:824"];
 		this.serverUrl = null;
 		this.webrtcEnabled = !!(io && nodeDatachannel);
+		this.audioEnabled = !!(Speaker && recorder);
+
+		// Audio playback
+		this.speakers = {};
+		this.microphoneStream = null;
+
+		// ICE candidate buffering (to handle candidates arriving before remote description)
+		this.pendingCandidates = {};
+		this.remoteDescriptionSet = {};
 
 		this.setupReadline();
 	}
@@ -645,7 +666,15 @@ Usage:
 
 		try {
 			const peerConnection = new nodeDatachannel.PeerConnection(peerId, {
-				iceServers: ['stun:stun.l.google.com:19302']
+				iceServers: [
+					'stun:stun.l.google.com:19302',
+					'stun:stun1.l.google.com:19302',
+					'stun:stun2.l.google.com:19302',
+					'stun:stun3.l.google.com:19302',
+					'stun:stun4.l.google.com:19302',
+					'stun:stun.relay.metered.ca:80',
+					'stun:turn.ahey.net:3478'
+				]
 			});
 
 			this.peerConnections[peerId] = peerConnection;
@@ -692,11 +721,71 @@ Usage:
 				}
 			});
 
+			// Add an audio track to send to the peer
+			if (nodeDatachannel.Audio) {
+				const audioTrack = new nodeDatachannel.Audio('audio');
+				audioTrack.addOpusCodec(96); // Add Opus codec support
+				peerConnection.addTrack(audioTrack);
+				console.log(`🎤 Added audio track for: ${this.peers[peerId]?.name || peerId}`);
+			}
+
+			// Handle incoming audio tracks
+			peerConnection.onTrack((track) => {
+				console.log(`🔊 Received audio track from: ${this.peers[peerId]?.name || peerId}`);
+				this.handleAudioTrack(peerId, track);
+			});
+
 			// Create and send offer
 			peerConnection.setLocalDescription('offer');
 
 		} catch (error) {
 			console.error(`❌ Error creating peer connection for ${peerId}:`, error.message);
+		}
+	}
+
+	handleAudioTrack(peerId, track) {
+		if (!Speaker) {
+			console.log('⚠️  Speaker not available for audio playback');
+			return;
+		}
+
+		console.log(`🎵 Setting up audio playback for: ${this.peers[peerId]?.name || peerId}`);
+
+		try {
+			// Create a new Speaker instance for this peer
+			const speaker = new Speaker({
+				channels: 2,          // 2 channels (stereo)
+				bitDepth: 16,         // 16-bit samples
+				sampleRate: 48000     // 48kHz sample rate (Opus default)
+			});
+
+			// Store the speaker for this peer
+			this.speakers[peerId] = speaker;
+
+			// Set up media handler for the track to receive RTP audio packets
+			track.setMediaHandler({
+				onSample: (sample) => {
+					if (this.speakers[peerId] && sample) {
+						try {
+							// Write PCM audio data to the speaker
+							this.speakers[peerId].write(sample);
+						} catch (error) {
+							console.error(`❌ Audio playback error for ${peerId}:`, error.message);
+						}
+					}
+				}
+			});
+
+			track.onClosed(() => {
+				console.log(`🔇 Audio track closed for: ${this.peers[peerId]?.name || peerId}`);
+				if (this.speakers[peerId]) {
+					this.speakers[peerId].end();
+					delete this.speakers[peerId];
+				}
+			});
+
+		} catch (error) {
+			console.error(`❌ Error setting up audio playback for ${peerId}:`, error.message);
 		}
 	}
 
@@ -712,7 +801,32 @@ Usage:
 		console.log(`📋 Received session description from: ${this.peers[peer_id]?.name || peer_id}`);
 
 		try {
-			peerConnection.setRemoteDescription(session_description);
+			// Convert browser format to node-datachannel format
+			// Browser: { sdp: string, type: string }
+			// Node-datachannel: setRemoteDescription(sdp: string, type: string)
+			const sdpString = session_description.sdp;
+			const typeString = session_description.type;
+
+			// Convert type to proper case for node-datachannel
+			const normalizedType = typeString.charAt(0).toUpperCase() + typeString.slice(1).toLowerCase();
+
+			peerConnection.setRemoteDescription(sdpString, normalizedType);
+
+			// Mark remote description as set
+			this.remoteDescriptionSet[peer_id] = true;
+
+			// Process any buffered ICE candidates
+			if (this.pendingCandidates[peer_id]) {
+				console.log(`📦 Processing ${this.pendingCandidates[peer_id].length} buffered ICE candidates for: ${this.peers[peer_id]?.name || peer_id}`);
+				for (const candidate of this.pendingCandidates[peer_id]) {
+					try {
+						peerConnection.addRemoteCandidate(candidate.candidateString, candidate.midString);
+					} catch (error) {
+						console.error(`❌ Error processing buffered candidate for ${peer_id}:`, error.message);
+					}
+				}
+				delete this.pendingCandidates[peer_id];
+			}
 
 			if (session_description.type === 'offer') {
 				// Create answer - onLocalDescription will handle sending it
@@ -733,7 +847,29 @@ Usage:
 		}
 
 		console.log(`🧊 Received ICE candidate from: ${this.peers[peer_id]?.name || peer_id}`);
-		peerConnection.addRemoteCandidate(ice_candidate.candidate, ice_candidate.sdpMid);
+
+		try {
+			// Convert browser format to node-datachannel format
+			// Browser: { candidate: string, sdpMid: string, ... }
+			// Node-datachannel: addRemoteCandidate(candidate: string, mid: string)
+			const candidateString = ice_candidate.candidate;
+			const midString = ice_candidate.sdpMid || '';
+
+			// Check if remote description has been set for this peer
+			if (this.remoteDescriptionSet[peer_id]) {
+				// Remote description is set, add candidate immediately
+				peerConnection.addRemoteCandidate(candidateString, midString);
+			} else {
+				// Remote description not set yet, buffer the candidate
+				console.log(`📦 Buffering ICE candidate for: ${this.peers[peer_id]?.name || peer_id} (waiting for remote description)`);
+				if (!this.pendingCandidates[peer_id]) {
+					this.pendingCandidates[peer_id] = [];
+				}
+				this.pendingCandidates[peer_id].push({ candidateString, midString });
+			}
+		} catch (error) {
+			console.error(`❌ Error handling ICE candidate from ${peer_id}:`, error);
+		}
 	}
 
 	handleDataChannelMessage(peerId, message) {
@@ -767,6 +903,14 @@ Usage:
 		if (this.dataChannels[peerId]) {
 			delete this.dataChannels[peerId];
 		}
+		// Clean up audio speakers
+		if (this.speakers[peerId]) {
+			this.speakers[peerId].end();
+			delete this.speakers[peerId];
+		}
+		// Clean up ICE candidate buffering
+		delete this.pendingCandidates[peerId];
+		delete this.remoteDescriptionSet[peerId];
 	}
 
 	quit() {

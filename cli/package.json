@@ -15,7 +15,9 @@
   "dependencies": {
     "ws": "^8.0.0",
     "socket.io-client": "^4.7.0",
-    "node-datachannel": "^0.7.0"
+    "node-datachannel": "^0.7.0",
+    "speaker": "^0.5.4",
+    "node-record-lpcm16": "^1.0.1"
   },
   "keywords": [
     "webrtc",

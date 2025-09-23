@@ -253,7 +253,7 @@ const App = Vue.createApp({
 			}
 			
 			this.callInitiated = true;
-			this.showExtraControls - false;
+			this.showExtraControls = false;
 			window.initiateCall();
 		},
 		setToast(message, type = "error") {
@@ -436,6 +436,14 @@ const App = Vue.createApp({
 		}
 		if (!this.callInitiated) {
 			this.getPreCallMedia();
+		}
+
+		// Auto-initiate call if URL path is /join
+		if (window.location.pathname === '/join') {
+			console.log('Auto-initiating call for /join URL');
+			setTimeout(() => {
+				this.initiateCall();
+			}, 1000); // Small delay to ensure everything is initialized
 		}
 	},
 }).mount("#app");

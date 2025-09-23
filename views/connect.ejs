@@ -82,20 +82,6 @@
 						</ul>
 					</section>
 
-
-					<section id="name" v-if="!callInitiated && !showExtraControls">
-						<!-- <input
-							type="text"
-							id="myName"
-							v-model="name"
-							v-on:keyup="updateName"
-							v-on:keyup.enter="initiateCall"
-							placeholder="Your name"
-							maxlength="50"
-						/> -->
-						<span class="loading">Connecting...</span>
-					</section>
-
 					<section id="buttons">
 						<button @click="callInitiated ? toggleAudio() : togglePreCallAudio()">
 							<i :class="'icon-mic'+(audioEnabled ? '' : '-off')"></i>
@@ -106,7 +92,7 @@
 								<button @click="toggleExtraControls"><i class="icon-more-vertical"></i></button>
 								<button class="red" @click="endCall" v-if="callInitiated"><i class="icon-phone-off"></i></button>
 						<button class="join" v-if="!callInitiated" v-on:click="initiateCall">
-							<i class="icon-phone"></i>&nbsp;Connect
+							<i class="icon-phone"></i>
 						</button>
 					</section>
 				</secion>

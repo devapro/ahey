@@ -435,7 +435,7 @@ const App = Vue.createApp({
 			console.warn('Vue App mounted but markAppReady not available');
 		}
 		if (!this.callInitiated) {
-			this.getPreCallMedia(); ///????
+			this.getPreCallMedia();
 		}
 	},
 }).mount("#app");

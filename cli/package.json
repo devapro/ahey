@@ -8,10 +8,14 @@
   },
   "scripts": {
     "start": "node audio-client.js",
-    "test": "node audio-client.js help"
+    "test": "node audio-client.js help",
+    "webrtc": "echo 'connect test' | node audio-client.js",
+    "basic": "echo 'basic test' | node audio-client.js"
   },
   "dependencies": {
-    "ws": "^8.0.0"
+    "ws": "^8.0.0",
+    "socket.io-client": "^4.7.0",
+    "node-datachannel": "^0.7.0"
   },
   "keywords": [
     "webrtc",

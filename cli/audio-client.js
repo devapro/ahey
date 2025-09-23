@@ -8,6 +8,18 @@ const readline = require('readline');
 const { execSync } = require('child_process');
 const net = require('net');
 
+// WebRTC support
+let io = null;
+let nodeDatachannel = null;
+
+try {
+	io = require('socket.io-client');
+	nodeDatachannel = require('node-datachannel');
+	console.log('✅ WebRTC modules loaded successfully');
+} catch (error) {
+	console.log('ℹ️  WebRTC modules not available. Running in basic mode.');
+}
+
 class AudioClient extends EventEmitter {
 	constructor() {
 		super();
@@ -18,9 +30,12 @@ class AudioClient extends EventEmitter {
 		this.callInitiated = false;
 		this.peers = {};
 		this.dataChannels = {};
+		this.peerConnections = {};
 		this.socket = null;
+		this.signalingSocket = null;
 		this.serverUrls = ["wss://192.168.0.31:824", "wss://localhost:824"];
 		this.serverUrl = null;
+		this.webrtcEnabled = !!(io && nodeDatachannel);
 
 		this.setupReadline();
 	}
@@ -40,7 +55,7 @@ class AudioClient extends EventEmitter {
 		console.log('🔍 Testing server connections...');
 
 		for (const url of this.serverUrls) {
-			const host = url.replace('wss://', '').split(':')[0];
+			const host = url.replace('wss://', '').replace('ws://', '').split(':')[0];
 			const port = parseInt(url.split(':')[2]) || 824;
 
 			console.log(`⏳ Testing ${host}:${port}...`);
@@ -106,8 +121,37 @@ class AudioClient extends EventEmitter {
 			case 'connect':
 			case 'c':
 				const channel = args[0] || 'test';
-				this.connect(channel).catch(error => {
-					console.error('Connection failed:', error.message);
+				if (this.webrtcEnabled) {
+					console.log('💡 Using WebRTC mode (for web compatibility). Use "basic <channel>" for WebSocket-only mode.');
+					this.connectWebRTC(channel).catch(error => {
+						console.error('WebRTC connection failed:', error.message);
+						this.prompt();
+					});
+				} else {
+					this.connectBasic(channel).catch(error => {
+						console.error('Basic connection failed:', error.message);
+						this.prompt();
+					});
+				}
+				break;
+			case 'webrtc':
+			case 'w':
+				const webrtcChannel = args[0] || 'test';
+				if (this.webrtcEnabled) {
+					this.connectWebRTC(webrtcChannel).catch(error => {
+						console.error('WebRTC connection failed:', error.message);
+						this.prompt();
+					});
+				} else {
+					console.log('❌ WebRTC not available. Install dependencies: npm install socket.io-client node-datachannel');
+					this.prompt();
+				}
+				break;
+			case 'basic':
+			case 'b':
+				const basicChannel = args[0] || 'test';
+				this.connectBasic(basicChannel).catch(error => {
+					console.error('Basic connection failed:', error.message);
 					this.prompt();
 				});
 				break;
@@ -164,9 +208,12 @@ class AudioClient extends EventEmitter {
 	}
 
 	showHelp() {
+		const webrtcStatus = this.webrtcEnabled ? '✅' : '❌';
 		console.log(`
 📞 Audio Client Commands:
-  connect <channel>    (c) - Connect to audio channel (default: test)
+  connect <channel>    (c) - Connect to audio channel (${webrtcStatus} WebRTC when available)
+  webrtc <channel>     (w) - Connect with WebRTC support (for web compatibility)
+  basic <channel>      (b) - Connect with basic WebSocket only
   disconnect          (d) - Disconnect from current channel
   name <name>         (n) - Set your display name
   audio               (a) - Toggle audio on/off
@@ -177,11 +224,14 @@ class AudioClient extends EventEmitter {
   server <number>         - Set server by number (1-${this.serverUrls.length})
   help                (h) - Show this help
   quit                (q) - Exit application
+
+💡 WebRTC mode ${webrtcStatus}: ${this.webrtcEnabled ? 'Available - connect with web users!' : 'Install: npm install socket.io-client node-datachannel'}
+🔗 'connect' now defaults to WebRTC mode when available for web compatibility.
 		`);
 		this.prompt();
 	}
 
-	async connect(channelId) {
+	async connectBasic(channelId) {
 		if (this.socket && this.socket.readyState === WebSocket.OPEN) {
 			console.log('⚠️  Already connected. Disconnect first.');
 			this.prompt();
@@ -204,7 +254,34 @@ class AudioClient extends EventEmitter {
 		console.log(`🌐 Using server: ${this.serverUrl}`);
 
 		// Connect to WebSocket (simulating the web client)
-		this.socket = new WebSocket(`${this.serverUrl.replace('ws://', 'ws://')}/socket.io/?EIO=4&transport=websocket`);
+		const wsOptions = {};
+		if (this.serverUrl.startsWith('wss://')) {
+			// Allow self-signed certificates for development
+			// WARNING: This is insecure and should only be used for development
+			wsOptions.rejectUnauthorized = false;
+		}
+
+		try {
+			this.socket = new WebSocket(`${this.serverUrl}/socket.io/?EIO=4&transport=websocket`, wsOptions);
+		} catch (error) {
+			console.error(`❌ WebSocket connection error: ${error.message}`);
+			if (error.message.includes('certificate')) {
+				console.log(`
+🔒 SSL Certificate Issue Detected!
+
+Solutions:
+1. Use HTTP instead of HTTPS:
+   server 2  (for localhost)
+
+2. Set environment variable (insecure):
+   NODE_TLS_REJECT_UNAUTHORIZED=0 node audio-client.js
+
+3. Add certificate to system trust store
+				`);
+			}
+			this.prompt();
+			return;
+		}
 
 		this.socket.on('open', () => {
 			console.log('🔗 Connected to server');
@@ -318,9 +395,21 @@ class AudioClient extends EventEmitter {
 			date: new Date().toISOString()
 		};
 
-		// In real implementation, this would send via data channels
-		// For CLI demo, we'll just log it
-		console.log(`📤 Sending ${type}:`, message);
+		// Send via WebRTC data channels if available
+		if (this.signalingSocket && Object.keys(this.dataChannels).length > 0) {
+			const messageStr = JSON.stringify(dataMessage);
+			Object.keys(this.dataChannels).forEach((peerId) => {
+				try {
+					this.dataChannels[peerId].sendMessage(messageStr);
+				} catch (error) {
+					console.error(`❌ Error sending to ${peerId}:`, error.message);
+				}
+			});
+			console.log(`📤 Sent via WebRTC ${type}:`, message);
+		} else {
+			// Fallback for basic mode
+			console.log(`📤 Sending ${type}:`, message);
+		}
 	}
 
 	showStatus() {
@@ -437,8 +526,260 @@ Usage:
 		}
 	}
 
+	async connectWebRTC(channelId) {
+		if (this.signalingSocket && this.signalingSocket.connected) {
+			console.log('⚠️  Already connected via WebRTC. Disconnect first.');
+			this.prompt();
+			return;
+		}
+
+		this.channelId = channelId;
+
+		if (!this.name) {
+			this.name = `CLI-User-${Math.random().toString(36).substr(2, 6)}`;
+		}
+
+		console.log(`📞 Connecting to WebRTC channel: ${channelId}`);
+		console.log(`👤 Using name: ${this.name}`);
+
+		// Select the best available server
+		if (!this.serverUrl) {
+			await this.selectBestServer();
+		}
+		console.log(`🌐 Using server: ${this.serverUrl}`);
+
+		// Connect to Socket.IO server for WebRTC signaling
+		const serverUrl = this.serverUrl.replace('/socket.io/', '');
+		console.log(`🔌 Connecting to signaling server: ${serverUrl}`);
+
+		this.signalingSocket = io(serverUrl, {
+			rejectUnauthorized: false,
+			transports: ['websocket', 'polling']
+		});
+
+		this.signalingSocket.on('connect', () => {
+			console.log('🔗 Connected to signaling server');
+			this.peerId = this.signalingSocket.id;
+
+			// Join the channel with proper server format
+			const userData = {
+				peerName: this.name,
+				userAgent: 'CLI WebRTC Client'
+			};
+			this.signalingSocket.emit('join', {
+				channel: this.channelId,
+				userData: userData
+			});
+
+			console.log(`🎯 Joined WebRTC channel: ${this.channelId}`);
+			console.log(`🆔 Your peer ID: ${this.peerId}`);
+			this.callInitiated = true;
+			this.showStatus();
+			this.prompt();
+		});
+
+		this.signalingSocket.on('disconnect', () => {
+			console.log('❌ Disconnected from signaling server');
+			this.callInitiated = false;
+			this.peers = {};
+			this.prompt();
+		});
+
+		this.signalingSocket.on('addPeer', (data) => {
+			const { peer_id, channel } = data;
+			console.log(`\n🟢 Peer ${peer_id} joined the channel (WebRTC)`);
+
+			if (channel && channel[peer_id] && channel[peer_id].userData) {
+				const peerName = channel[peer_id].userData.peerName || 'Unknown';
+				this.peers[peer_id] = {
+					name: peerName,
+					isTalking: false,
+					webrtc: true
+				};
+				console.log(`\n🟢 ${peerName} joined the channel (WebRTC)`);
+			} else {
+				this.peers[peer_id] = {
+					name: `Peer-${peer_id.slice(-6)}`,
+					isTalking: false,
+					webrtc: true
+				};
+			}
+
+			this.createPeerConnection(peer_id);
+			this.prompt();
+		});
+
+		this.signalingSocket.on('removePeer', (data) => {
+			const { peer_id } = data;
+			const peer = this.peers[peer_id];
+			if (peer) {
+				console.log(`\n🔴 ${peer.name} left the channel`);
+				this.cleanupPeerConnection(peer_id);
+				delete this.peers[peer_id];
+			}
+			this.prompt();
+		});
+
+		// Handle WebRTC signaling
+		this.signalingSocket.on('sessionDescription', (data) => {
+			this.handleSessionDescription(data);
+		});
+
+		this.signalingSocket.on('iceCandidate', (data) => {
+			this.handleIceCandidate(data);
+		});
+
+		this.signalingSocket.on('error', (error) => {
+			console.error('🚨 Signaling error:', error);
+			this.prompt();
+		});
+	}
+
+	createPeerConnection(peerId) {
+		if (!nodeDatachannel) {
+			console.log('⚠️  WebRTC not available for peer connections');
+			return;
+		}
+
+		console.log(`🔗 Creating peer connection for: ${peerId}`);
+
+		try {
+			const peerConnection = new nodeDatachannel.PeerConnection(peerId, {
+				iceServers: ['stun:stun.l.google.com:19302']
+			});
+
+			this.peerConnections[peerId] = peerConnection;
+
+			// Create data channel for messaging
+			const dataChannel = peerConnection.createDataChannel('messages');
+			this.dataChannels[peerId] = dataChannel;
+
+			dataChannel.onOpen(() => {
+				console.log(`💬 Data channel opened for: ${this.peers[peerId]?.name || peerId}`);
+			});
+
+			dataChannel.onMessage((message) => {
+				this.handleDataChannelMessage(peerId, message);
+			});
+
+			// Handle incoming data channels
+			peerConnection.onDataChannel((channel) => {
+				console.log(`📨 Incoming data channel from: ${this.peers[peerId]?.name || peerId}`);
+				this.dataChannels[peerId] = channel;
+
+				channel.onMessage((message) => {
+					this.handleDataChannelMessage(peerId, message);
+				});
+			});
+
+			// Handle ICE candidates
+			peerConnection.onLocalCandidate((candidate) => {
+				if (this.signalingSocket) {
+					this.signalingSocket.emit('relayICECandidate', {
+						peer_id: peerId,
+						ice_candidate: candidate
+					});
+				}
+			});
+
+			// Handle local descriptions (offers/answers)
+			peerConnection.onLocalDescription((description) => {
+				if (this.signalingSocket) {
+					this.signalingSocket.emit('relaySessionDescription', {
+						peer_id: peerId,
+						session_description: description
+					});
+				}
+			});
+
+			// Create and send offer
+			peerConnection.setLocalDescription('offer');
+
+		} catch (error) {
+			console.error(`❌ Error creating peer connection for ${peerId}:`, error.message);
+		}
+	}
+
+	handleSessionDescription(data) {
+		const { peer_id, session_description } = data;
+		const peerConnection = this.peerConnections[peer_id];
+
+		if (!peerConnection) {
+			console.log(`⚠️  No peer connection found for: ${peer_id}`);
+			return;
+		}
+
+		console.log(`📋 Received session description from: ${this.peers[peer_id]?.name || peer_id}`);
+
+		try {
+			peerConnection.setRemoteDescription(session_description);
+
+			if (session_description.type === 'offer') {
+				// Create answer - onLocalDescription will handle sending it
+				peerConnection.setLocalDescription('answer');
+			}
+		} catch (error) {
+			console.error(`❌ Error handling session description from ${peer_id}:`, error);
+		}
+	}
+
+	handleIceCandidate(data) {
+		const { peer_id, ice_candidate } = data;
+		const peerConnection = this.peerConnections[peer_id];
+
+		if (!peerConnection) {
+			console.log(`⚠️  No peer connection found for ICE candidate from: ${peer_id}`);
+			return;
+		}
+
+		console.log(`🧊 Received ICE candidate from: ${this.peers[peer_id]?.name || peer_id}`);
+		peerConnection.addRemoteCandidate(ice_candidate.candidate, ice_candidate.sdpMid);
+	}
+
+	handleDataChannelMessage(peerId, message) {
+		try {
+			const data = JSON.parse(message);
+			const peer = this.peers[peerId];
+
+			if (!peer) return;
+
+			switch (data.type) {
+				case 'peerName':
+					const oldName = peer.name;
+					peer.name = data.message;
+					console.log(`\n👤 ${oldName} changed name to ${data.message}`);
+					break;
+				case 'message':
+					console.log(`\n💬 ${peer.name}: ${data.message}`);
+					break;
+			}
+			this.prompt();
+		} catch (error) {
+			console.error('❌ Error parsing data channel message:', error);
+		}
+	}
+
+	cleanupPeerConnection(peerId) {
+		if (this.peerConnections[peerId]) {
+			this.peerConnections[peerId].close();
+			delete this.peerConnections[peerId];
+		}
+		if (this.dataChannels[peerId]) {
+			delete this.dataChannels[peerId];
+		}
+	}
+
 	quit() {
 		console.log('👋 Goodbye!');
+
+		// Clean up WebRTC connections
+		Object.keys(this.peerConnections).forEach(peerId => {
+			this.cleanupPeerConnection(peerId);
+		});
+
+		if (this.signalingSocket) {
+			this.signalingSocket.disconnect();
+		}
 		if (this.socket) {
 			this.socket.close();
 		}

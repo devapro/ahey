@@ -108,6 +108,10 @@ function setupEventListeners() {
 		console.log('peer.js: Processing peerStreamReady event', peerId);
 		if (App.peers[peerId]) {
 			App.peers[peerId].stream = stream;
+			// Handle audio stream with Audio() objects
+			if (App.handlePeerStream) {
+				App.handlePeerStream(peerId, stream);
+			}
 			// Force reactivity update for stream changes
 			App.$forceUpdate?.();
 			console.log('peer.js: Stream added to peer:', peerId);
@@ -119,6 +123,10 @@ function setupEventListeners() {
 	webrtcManager.on('peerRemoved', handleEvent('peerRemoved', ({ peerId }) => {
 		console.log('peer.js: Processing peerRemoved event', peerId);
 		if (App.peers[peerId]) {
+			// Clean up audio elements
+			if (App.cleanupPeerAudio) {
+				App.cleanupPeerAudio(peerId);
+			}
 			delete App.peers[peerId];
 			// Force reactivity update
 			App.$forceUpdate?.();

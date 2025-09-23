@@ -7,7 +7,7 @@ router.get("/", (req, res) => res.render("index", { page: "index", title: "A fre
 
 // Route: Auto join page
 router.get("/join", (req, res) => {
-	res.render("connect", { page: "channel", title: "Connect" });
+	res.render("join", { page: "join", title: "Connect" });
 });
 
 // Route: Room page (dynamic)

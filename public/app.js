@@ -9,6 +9,7 @@ const App = Vue.createApp({
 		const searchParams = new URLSearchParams(window.location.search);
 
 		const name = searchParams.get("name");
+		const disableVideo = searchParams.get("disableVideo");
 
 		return {
 			channelId,
@@ -17,7 +18,7 @@ const App = Vue.createApp({
 			audioDevices: [],
 			videoDevices: [],
 			audioEnabled: true,
-			videoEnabled: true,
+			videoEnabled: disableVideo === "true" ? false : true,
 			selectedAudioDeviceId: null,
 			selectedVideoDeviceId: null,
 			name: name ?? window.localStorage.name,
